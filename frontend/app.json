@@ -17,6 +17,7 @@
       }
     },
     "android": {
+      "package": "com.ghostchat.meteo",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#1e88e5"
@@ -25,7 +26,8 @@
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.READ_EXTERNAL_STORAGE",
-        "android.permission.USE_BIOMETRIC"
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT"
       ]
     },
     "web": {
@@ -49,6 +51,13 @@
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "6f87bebf-351a-45d8-98da-a03dbd6375b3"
+      }
+    },
+    "owner": "mad_deep888"
   }
 }
