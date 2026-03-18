@@ -498,6 +498,19 @@ async def health_check():
     """Health check endpoint"""
     return {"status": "ok", "timestamp": datetime.utcnow()}
 
+@api_router.get("/logo")
+async def get_logo():
+    """Get the GhostChat logo as base64"""
+    import base64
+    logo_path = "/app/frontend/assets/images/ghost-logo.png"
+    try:
+        with open(logo_path, "rb") as f:
+            img_data = f.read()
+            b64 = base64.b64encode(img_data).decode('utf-8')
+            return {"logo": f"data:image/png;base64,{b64}"}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Logo not found")
+
 # Include the router in the main app
 app.include_router(api_router)
 
