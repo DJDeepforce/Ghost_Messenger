@@ -277,9 +277,15 @@ export default function ChatListScreen() {
         <View style={styles.headerButtons}>
           <TouchableOpacity
             style={styles.headerButton}
-            onPress={() => setShowNewChat(true)}
+            onPress={() => router.push('/my-qr')}
           >
-            <Ionicons name="create-outline" size={24} color="#6366f1" />
+            <Ionicons name="qr-code" size={22} color="#6366f1" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.headerButton}
+            onPress={() => router.push('/scan-qr')}
+          >
+            <Ionicons name="scan" size={22} color="#6366f1" />
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.headerButton}
@@ -307,7 +313,25 @@ export default function ChatListScreen() {
           <View style={styles.emptyContainer}>
             <Ionicons name="chatbubbles-outline" size={64} color="#333" />
             <Text style={styles.emptyText}>Aucune conversation</Text>
-            <Text style={styles.emptySubtext}>Commencez une nouvelle conversation</Text>
+            <Text style={styles.emptySubtext}>Scannez un QR code pour ajouter un contact</Text>
+            
+            <View style={styles.emptyActions}>
+              <TouchableOpacity
+                style={styles.emptyActionButton}
+                onPress={() => router.push('/scan-qr')}
+              >
+                <Ionicons name="scan" size={22} color="#fff" />
+                <Text style={styles.emptyActionText}>Scanner un QR</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={[styles.emptyActionButton, styles.emptyActionSecondary]}
+                onPress={() => router.push('/my-qr')}
+              >
+                <Ionicons name="qr-code" size={22} color="#6366f1" />
+                <Text style={[styles.emptyActionText, { color: '#6366f1' }]}>Mon QR Code</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         }
       />
@@ -515,6 +539,30 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#444',
     marginTop: 4,
+    marginBottom: 24,
+  },
+  emptyActions: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  emptyActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#6366f1',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    gap: 8,
+  },
+  emptyActionSecondary: {
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: '#6366f1',
+  },
+  emptyActionText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#fff',
   },
   modalOverlay: {
     flex: 1,
