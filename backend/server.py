@@ -40,6 +40,7 @@ class UserCreate(BaseModel):
     username: str
     pin_hash: str  # Client sends hashed PIN
     public_key: str  # For E2E encryption
+    duress_pin_hash: Optional[str] = None  # Duress PIN - wipes data when entered
 
 class UserLogin(BaseModel):
     username: str
@@ -128,6 +129,7 @@ async def register_user(user: UserCreate):
         "id": user_id,
         "username": user.username,
         "pin_hash": hash_data(user.pin_hash),  # Double hash for extra security
+        "duress_pin_hash": hash_data(user.duress_pin_hash) if user.duress_pin_hash else None,
         "public_key": user.public_key,
         "created_at": datetime.utcnow(),
         "is_active": True
@@ -144,7 +146,31 @@ async def register_user(user: UserCreate):
 
 @api_router.post("/auth/login")
 async def login_user(credentials: UserLogin):
-    """Login with username and PIN hash"""
+    """Login with username and PIN hash - checks for duress PIN"""
+    # First check if this is a duress PIN
+    user_with_duress = await db.users.find_one({
+        "username": credentials.username,
+        "duress_pin_hash": hash_data(credentials.pin_hash),
+        "is_active": True
+    })
+    
+    if user_with_duress:
+        # DURESS PIN DETECTED - Wipe all data silently
+        user_id = user_with_duress["id"]
+        
+        # Delete all user data
+        await db.messages.delete_many({
+            "$or": [{"sender_id": user_id}, {"recipient_id": user_id}]
+        })
+        await db.conversations.delete_many({"participants": user_id})
+        await db.sessions.delete_many({"user_id": user_id})
+        await db.invites.delete_many({"created_by": user_id})
+        await db.users.delete_one({"id": user_id})
+        
+        # Return fake "invalid credentials" to not reveal duress activation
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    # Normal login
     user = await db.users.find_one({
         "username": credentials.username,
         "pin_hash": hash_data(credentials.pin_hash),

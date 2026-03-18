@@ -20,7 +20,7 @@ interface AuthContextType {
   isAuthenticated: boolean;
   biometricsEnabled: boolean;
   login: (username: string, pin: string) => Promise<boolean>;
-  register: (username: string, pin: string) => Promise<boolean>;
+  register: (username: string, pin: string, duressPin?: string) => Promise<boolean>;
   logout: () => Promise<void>;
   panic: () => Promise<void>;
   verifyBiometrics: () => Promise<boolean>;
@@ -149,9 +149,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const register = async (username: string, pin: string): Promise<boolean> => {
+  const register = async (username: string, pin: string, duressPin?: string): Promise<boolean> => {
     try {
       const pinHash = hashPin(pin);
+      const duressPinHash = duressPin ? hashPin(duressPin) : null;
       const keys = await generateKeyPair();
 
       const response = await fetch(`${API_URL}/api/auth/register`, {
@@ -161,6 +162,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           username,
           pin_hash: pinHash,
           public_key: keys.publicKey,
+          duress_pin_hash: duressPinHash,
         }),
       });
 

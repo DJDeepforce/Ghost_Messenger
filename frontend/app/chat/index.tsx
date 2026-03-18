@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   Alert,
   TextInput,
   Modal,
+  Animated,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -16,6 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/context/AuthContext';
 
 const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
+const LONG_PRESS_DURATION = 5000; // 5 seconds for panic
 
 interface Conversation {
   id: string;
@@ -42,6 +44,50 @@ export default function ChatListScreen() {
   const [searchResults, setSearchResults] = useState<User[]>([]);
   const [searching, setSearching] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
+
+  // Long press for panic mode
+  const pressProgress = useRef(new Animated.Value(0)).current;
+  const longPressTimer = useRef<NodeJS.Timeout | null>(null);
+  const [isPressing, setIsPressing] = useState(false);
+
+  const handlePressIn = () => {
+    setIsPressing(true);
+    pressProgress.setValue(0);
+    
+    Animated.timing(pressProgress, {
+      toValue: 1,
+      duration: LONG_PRESS_DURATION,
+      useNativeDriver: false,
+    }).start();
+
+    longPressTimer.current = setTimeout(async () => {
+      setIsPressing(false);
+      pressProgress.setValue(0);
+      
+      Alert.alert(
+        '🚨 RESET ACTIVÉ',
+        'Toutes les données ont été supprimées.',
+        [{ text: 'OK', onPress: () => router.replace('/auth') }]
+      );
+      
+      await panic();
+    }, LONG_PRESS_DURATION);
+  };
+
+  const handlePressOut = () => {
+    setIsPressing(false);
+    pressProgress.setValue(0);
+    
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  };
+
+  const progressWidth = pressProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0%', '100%'],
+  });
 
   useEffect(() => {
     loadConversations();
@@ -211,10 +257,23 @@ export default function ChatListScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       {/* Header */}
       <View style={styles.header}>
-        <View>
-          <Text style={styles.title}>Messages</Text>
-          <Text style={styles.username}>@{user?.username}</Text>
-        </View>
+        <TouchableOpacity
+          onPressIn={handlePressIn}
+          onPressOut={handlePressOut}
+          activeOpacity={1}
+        >
+          <View style={styles.titleContainer}>
+            <Text style={styles.title}>Messages</Text>
+            <Text style={styles.username}>@{user?.username}</Text>
+            {isPressing && (
+              <View style={styles.progressContainer}>
+                <Animated.View 
+                  style={[styles.progressBar, { width: progressWidth }]} 
+                />
+              </View>
+            )}
+          </View>
+        </TouchableOpacity>
         <View style={styles.headerButtons}>
           <TouchableOpacity
             style={styles.headerButton}
@@ -370,6 +429,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#1a1a1a',
   },
+  titleContainer: {
+    position: 'relative',
+  },
   title: {
     fontSize: 28,
     fontWeight: 'bold',
@@ -379,6 +441,20 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
     marginTop: 2,
+  },
+  progressContainer: {
+    position: 'absolute',
+    bottom: -8,
+    left: 0,
+    right: 0,
+    height: 3,
+    backgroundColor: 'rgba(239, 68, 68, 0.3)',
+    borderRadius: 2,
+  },
+  progressBar: {
+    height: '100%',
+    backgroundColor: '#ef4444',
+    borderRadius: 2,
   },
   headerButtons: {
     flexDirection: 'row',
