@@ -15,7 +15,7 @@ import {
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useAuth } from '../src/context/AuthContext';
+import { useAuth, useRegisterWithError } from '../src/context/AuthContext';
 
 const LONG_PRESS_DURATION = 5000; // 5 seconds for panic
 
@@ -23,6 +23,7 @@ export default function AuthScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { login, register, panic } = useAuth();
+  const registerWithError = useRegisterWithError();
   
   const [isLogin, setIsLogin] = useState(true);
   const [username, setUsername] = useState('');
@@ -63,23 +64,29 @@ export default function AuthScreen() {
     
     try {
       let success: boolean;
+      let errorMessage: string = '';
       
       if (isLogin) {
         success = await login(username.trim(), pin);
+        errorMessage = 'Identifiants incorrects';
       } else {
-        success = await register(username.trim(), pin, duressPin || undefined);
+        // Try to register
+        const result = await registerWithError(username.trim(), pin, duressPin || undefined);
+        success = result.success;
+        errorMessage = result.error || 'Erreur lors de la création du compte';
       }
 
       if (success) {
         router.replace('/chat');
       } else {
-        Alert.alert(
-          'Erreur',
-          isLogin ? 'Identifiants incorrects' : 'Nom d\'utilisateur déjà pris'
-        );
+        Alert.alert('Erreur', errorMessage);
       }
-    } catch (error) {
-      Alert.alert('Erreur', 'Une erreur est survenue');
+    } catch (error: any) {
+      console.error('Auth error:', error);
+      Alert.alert(
+        'Erreur de connexion', 
+        'Impossible de contacter le serveur. Vérifiez votre connexion internet.'
+      );
     } finally {
       setLoading(false);
     }

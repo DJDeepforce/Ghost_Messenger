@@ -314,3 +314,75 @@ export function useAuth() {
   }
   return context;
 }
+
+export function useRegisterWithError() {
+  const { login } = useAuth();
+  
+  const registerWithError = async (
+    username: string, 
+    pin: string, 
+    duressPin?: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
+      
+      // Hash PIN
+      const pinBytes = naclUtil.decodeUTF8(pin);
+      const hash = nacl.hash(pinBytes);
+      const pinHash = naclUtil.encodeBase64(hash);
+      
+      // Generate key pair
+      const keyPairRaw = nacl.box.keyPair();
+      const publicKey = naclUtil.encodeBase64(keyPairRaw.publicKey);
+      const secretKey = naclUtil.encodeBase64(keyPairRaw.secretKey);
+      
+      // Store secret key
+      if (Platform.OS !== 'web') {
+        await SecureStore.setItemAsync('secret_key', secretKey);
+      }
+      
+      // Duress PIN hash
+      let duressPinHash = null;
+      if (duressPin) {
+        const duressBytes = naclUtil.decodeUTF8(duressPin);
+        const duressHash = nacl.hash(duressBytes);
+        duressPinHash = naclUtil.encodeBase64(duressHash);
+      }
+
+      const response = await fetch(`${API_URL}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username,
+          pin_hash: pinHash,
+          public_key: publicKey,
+          duress_pin_hash: duressPinHash,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        if (response.status === 400 && errorData.detail === 'Username taken') {
+          return { success: false, error: 'Ce nom d\'utilisateur est déjà pris' };
+        }
+        return { success: false, error: errorData.detail || 'Erreur lors de l\'inscription' };
+      }
+
+      // Auto login after registration
+      const loginSuccess = await login(username, pin);
+      if (!loginSuccess) {
+        return { success: false, error: 'Compte créé mais échec de connexion' };
+      }
+      
+      return { success: true };
+    } catch (error: any) {
+      console.error('Register error:', error);
+      if (error.message?.includes('Network') || error.message?.includes('fetch')) {
+        return { success: false, error: 'Impossible de contacter le serveur. Vérifiez votre connexion.' };
+      }
+      return { success: false, error: 'Erreur inattendue. Réessayez.' };
+    }
+  };
+  
+  return registerWithError;
+}
