@@ -9,7 +9,7 @@ import Constants from 'expo-constants';
 // Get API URL from environment or app.json extra
 const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 
   Constants.expoConfig?.extra?.backendUrl || 
-  'https://phantom-msg-4.preview.emergentagent.com';
+  'https://ghost-messenger.onrender.com';
 
 interface User {
   id: string;
@@ -331,7 +331,7 @@ export function useRegisterWithError() {
       // Use the same fallback chain as the main AuthProvider
       const REGISTER_API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 
         Constants.expoConfig?.extra?.backendUrl || 
-        'https://phantom-msg-4.preview.emergentagent.com';
+        'https://ghost-messenger.onrender.com';
       
       // Hash PIN
       const pinBytes = naclUtil.decodeUTF8(pin);
