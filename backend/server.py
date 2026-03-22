@@ -18,11 +18,19 @@ import base64
 import certifi
 
 ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+# Only load .env if it exists AND we're not on a cloud platform (Render sets env vars directly)
+env_path = ROOT_DIR / '.env'
+if env_path.exists():
+    load_dotenv(env_path, override=False)  # Never override platform env vars
 
 # MongoDB connection - supports both local and Atlas (cloud)
 mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
 db_name = os.environ.get('DB_NAME', 'ghostchat_db')
+
+# Log which DB we're connecting to (masked for security)
+_masked_url = mongo_url[:20] + '...' if len(mongo_url) > 20 else mongo_url
+print(f"[STARTUP] Connecting to MongoDB: {_masked_url}")
+print(f"[STARTUP] Database name: {db_name}")
 
 # Use SSL/TLS for Atlas (mongodb+srv) connections
 if mongo_url.startswith('mongodb+srv') or 'mongodb.net' in mongo_url:
@@ -126,31 +134,37 @@ async def verify_session(authorization: Optional[str] = Header(None)):
 @api_router.post("/auth/register", response_model=UserResponse)
 async def register_user(user: UserCreate):
     """Register anonymous user with username and hashed PIN"""
-    # Check if username exists
-    existing = await db.users.find_one({"username": user.username})
-    if existing:
-        raise HTTPException(status_code=400, detail="Username taken")
-    
-    # Create user
-    user_id = str(uuid.uuid4())
-    user_doc = {
-        "id": user_id,
-        "username": user.username,
-        "pin_hash": hash_data(user.pin_hash),  # Double hash for extra security
-        "duress_pin_hash": hash_data(user.duress_pin_hash) if user.duress_pin_hash else None,
-        "public_key": user.public_key,
-        "created_at": datetime.utcnow(),
-        "is_active": True
-    }
-    
-    await db.users.insert_one(user_doc)
-    
-    return UserResponse(
-        id=user_id,
-        username=user.username,
-        public_key=user.public_key,
-        created_at=user_doc["created_at"]
-    )
+    try:
+        # Check if username exists
+        existing = await db.users.find_one({"username": user.username})
+        if existing:
+            raise HTTPException(status_code=400, detail="Username taken")
+        
+        # Create user
+        user_id = str(uuid.uuid4())
+        user_doc = {
+            "id": user_id,
+            "username": user.username,
+            "pin_hash": hash_data(user.pin_hash),  # Double hash for extra security
+            "duress_pin_hash": hash_data(user.duress_pin_hash) if user.duress_pin_hash else None,
+            "public_key": user.public_key,
+            "created_at": datetime.utcnow(),
+            "is_active": True
+        }
+        
+        await db.users.insert_one(user_doc)
+        
+        return UserResponse(
+            id=user_id,
+            username=user.username,
+            public_key=user.public_key,
+            created_at=user_doc["created_at"]
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Registration error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @api_router.post("/auth/login")
 async def login_user(credentials: UserLogin):
@@ -505,6 +519,28 @@ async def panic_mode(request: PanicRequest, user_id: str = Depends(verify_sessio
 async def health_check():
     """Health check endpoint"""
     return {"status": "ok", "timestamp": datetime.utcnow()}
+
+@api_router.get("/debug/db-status")
+async def db_status():
+    """Check database connection status"""
+    try:
+        # Try to ping the database
+        result = await client.admin.command('ping')
+        db_list = await client.list_database_names()
+        return {
+            "status": "connected",
+            "ping": result,
+            "db_name": db_name,
+            "mongo_type": "atlas" if 'mongodb.net' in mongo_url or mongo_url.startswith('mongodb+srv') else "local",
+            "databases": db_list
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "mongo_url_prefix": mongo_url[:25] + "..." if len(mongo_url) > 25 else "too_short",
+            "db_name": db_name
+        }
 
 @api_router.get("/logo")
 async def get_logo():
