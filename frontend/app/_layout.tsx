@@ -1,3 +1,6 @@
+// CRITICAL: Must be imported FIRST for TweetNaCl crypto support
+import 'react-native-get-random-values';
+
 import React from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
