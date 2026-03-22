@@ -34,7 +34,15 @@ print(f"[STARTUP] Database name: {db_name}")
 
 # Use SSL/TLS for Atlas (mongodb+srv) connections
 if mongo_url.startswith('mongodb+srv') or 'mongodb.net' in mongo_url:
-    client = AsyncIOMotorClient(mongo_url, tlsCAFile=certifi.where())
+    client = AsyncIOMotorClient(
+        mongo_url, 
+        tlsCAFile=certifi.where(),
+        tls=True,
+        tlsAllowInvalidCertificates=False,
+        serverSelectionTimeoutMS=30000,
+        connectTimeoutMS=30000,
+        socketTimeoutMS=30000,
+    )
 else:
     client = AsyncIOMotorClient(mongo_url)
 
