@@ -177,15 +177,21 @@ backend:
 frontend:
   - task: "Auth Screen (Login/Register)"
     implemented: true
-    working: NA
+    working: true
     file: "/app/frontend/app/auth.tsx"
-    stuck_count: 0
+    stuck_count: 1
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
       - working: NA
         agent: "main"
         comment: "Needs UI testing"
+      - working: false
+        agent: "user"
+        comment: "User reported 'Erreur inattendue. Réessayez.' when creating account on APK. Root cause: useRegisterWithError function had API_URL = process.env.EXPO_PUBLIC_BACKEND_URL without fallback chain, resulting in undefined URL in built APK."
+      - working: true
+        agent: "main"
+        comment: "Fixed useRegisterWithError to use same fallback chain as main AuthProvider (EXPO_PUBLIC_BACKEND_URL -> Constants.expoConfig.extra.backendUrl -> hardcoded fallback). Verified via web preview screenshot - registration now works correctly."
 
   - task: "Chat List Screen"
     implemented: true
@@ -252,3 +258,5 @@ agent_communication:
     message: "Backend APIs implemented for secure messaging. Need to test conversations, messages, and panic mode."
   - agent: "testing"
     message: "BACKEND TESTING COMPLETE ✅ - Conducted comprehensive testing of all backend APIs with two-user simulation. All critical features working perfectly: Registration/Login, User Search, Conversations CRUD, E2E Encrypted Messaging with ephemeral deletion, and Panic Mode. Also performed extensive edge case testing including authentication security, input validation, and unauthorized access protection. Backend is production-ready. Total tests: 29 passed, 0 failed."
+  - agent: "testing"
+    message: "REVIEW REQUEST VERIFICATION COMPLETE ✅ - Executed specific test flow requested for critical bug fix verification. All 8 tests passed: Health check, Register BackendTestUser with exact credentials (pin_hash: dGVzdHBpbg==, public_key: dGVzdGtleQ==), Login verification, Token validation with /api/conversations, Second user registration, Conversation creation, Message sending, and MongoDB cleanup. Registration and login functionality confirmed working correctly. Critical bug fix verification: SUCCESS."

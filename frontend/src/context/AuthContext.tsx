@@ -328,7 +328,10 @@ export function useRegisterWithError() {
     duressPin?: string
   ): Promise<{ success: boolean; error?: string }> => {
     try {
-      const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
+      // Use the same fallback chain as the main AuthProvider
+      const REGISTER_API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 
+        Constants.expoConfig?.extra?.backendUrl || 
+        'https://phantom-msg-4.preview.emergentagent.com';
       
       // Hash PIN
       const pinBytes = naclUtil.decodeUTF8(pin);
@@ -353,7 +356,7 @@ export function useRegisterWithError() {
         duressPinHash = naclUtil.encodeBase64(duressHash);
       }
 
-      const response = await fetch(`${API_URL}/api/auth/register`, {
+      const response = await fetch(`${REGISTER_API_URL}/api/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
