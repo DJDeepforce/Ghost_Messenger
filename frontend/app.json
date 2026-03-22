@@ -63,7 +63,8 @@
       },
       "eas": {
         "projectId": "6f87bebf-351a-45d8-98da-a03dbd6375b3"
-      }
+      },
+      "backendUrl": "https://vault-talk-4.preview.emergentagent.com"
     },
     "owner": "mad_deep888",
     "runtimeVersion": {

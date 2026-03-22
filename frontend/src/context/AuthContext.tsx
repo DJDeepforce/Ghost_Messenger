@@ -4,8 +4,12 @@ import * as LocalAuthentication from 'expo-local-authentication';
 import nacl from 'tweetnacl';
 import naclUtil from 'tweetnacl-util';
 import { Platform } from 'react-native';
+import Constants from 'expo-constants';
 
-const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
+// Get API URL from environment or app.json extra
+const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 
+  Constants.expoConfig?.extra?.backendUrl || 
+  'https://vault-talk-4.preview.emergentagent.com';
 
 interface User {
   id: string;
