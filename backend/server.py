@@ -15,14 +15,22 @@ from nacl import secret, utils
 from nacl.public import PrivateKey, PublicKey, Box
 from nacl.encoding import Base64Encoder
 import base64
+import certifi
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+# MongoDB connection - supports both local and Atlas (cloud)
+mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
+db_name = os.environ.get('DB_NAME', 'ghostchat_db')
+
+# Use SSL/TLS for Atlas (mongodb+srv) connections
+if mongo_url.startswith('mongodb+srv') or 'mongodb.net' in mongo_url:
+    client = AsyncIOMotorClient(mongo_url, tlsCAFile=certifi.where())
+else:
+    client = AsyncIOMotorClient(mongo_url)
+
+db = client[db_name]
 
 # Create the main app
 app = FastAPI()
