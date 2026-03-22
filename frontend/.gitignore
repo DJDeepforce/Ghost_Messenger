@@ -9,3 +9,5 @@ dist/
 
 expo-env.d.ts
 # @end expo-cli.metro-cache/
+.metro-cache/
+dist/

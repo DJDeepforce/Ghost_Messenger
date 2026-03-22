@@ -36,7 +36,7 @@ export default function AuthScreen() {
   
   // Long press animation
   const pressProgress = useRef(new Animated.Value(0)).current;
-  const longPressTimer = useRef<NodeJS.Timeout | null>(null);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isPressing, setIsPressing] = useState(false);
 
   const handleAuth = async () => {
