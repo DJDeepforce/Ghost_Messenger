@@ -6,10 +6,22 @@ import naclUtil from 'tweetnacl-util';
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 
-// Get API URL from environment or app.json extra
-const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 
-  Constants.expoConfig?.extra?.backendUrl || 
-  'https://ghost-messenger.onrender.com';
+// Permanent backend URL (Render deployment)
+const RENDER_URL = 'https://ghost-messenger.onrender.com';
+
+// Get API URL - use Render URL for standalone APK, dev URL for Expo Go
+const getApiUrl = (): string => {
+  // In standalone APK builds, always use permanent Render URL
+  if (Constants.appOwnership !== 'expo') {
+    return RENDER_URL;
+  }
+  // In Expo Go development, try env/config first, fallback to Render
+  return process.env.EXPO_PUBLIC_BACKEND_URL || 
+    Constants.expoConfig?.extra?.backendUrl || 
+    RENDER_URL;
+};
+
+const API_URL = getApiUrl();
 
 interface User {
   id: string;
@@ -328,10 +340,8 @@ export function useRegisterWithError() {
     duressPin?: string
   ): Promise<{ success: boolean; error?: string }> => {
     try {
-      // Use the same fallback chain as the main AuthProvider
-      const REGISTER_API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 
-        Constants.expoConfig?.extra?.backendUrl || 
-        'https://ghost-messenger.onrender.com';
+      // Use the same URL logic as the main AuthProvider
+      const REGISTER_API_URL = getApiUrl();
       
       // Hash PIN
       const pinBytes = naclUtil.decodeUTF8(pin);
