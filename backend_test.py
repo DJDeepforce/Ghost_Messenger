@@ -15,7 +15,7 @@ from nacl.public import PrivateKey, PublicKey, Box
 from nacl.encoding import Base64Encoder
 
 # Base URL from environment
-BASE_URL = "https://vault-talk-4.preview.emergentagent.com/api"
+BASE_URL = "https://phantom-msg-4.preview.emergentagent.com/api"
 
 class TestResult:
     def __init__(self):

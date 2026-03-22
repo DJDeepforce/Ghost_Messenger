@@ -9,7 +9,7 @@ import Constants from 'expo-constants';
 // Get API URL from environment or app.json extra
 const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 
   Constants.expoConfig?.extra?.backendUrl || 
-  'https://vault-talk-4.preview.emergentagent.com';
+  'https://phantom-msg-4.preview.emergentagent.com';
 
 interface User {
   id: string;

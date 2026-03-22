@@ -1,0 +1,134 @@
+<analysis>Here is the handover summary for the next agent:
+
+**original_problem_statement**: 
+J aimerais créer une messagerie privée qui ait comme principe la sécurité et la confidentialités et l anonymat de l utilisateur et qui ne laisserait aucune trace récupérable dans le téléphone. (I would like to create a private messaging app based on security, privacy, and user anonymity that leaves no recoverable trace on the phone).
+PRODUCT REQUIREMENTS: E2E Encryption, Anonymous Auth, Ephemeral Messages, Zero local trace (SecureStore), Panic Mode/Distress PIN, Disguised App interface.
+
+**User's preferred language**: 
+<trajectory> The user communicates entirely in French. </trajectory>
+**INSTRUCT**: Next agent MUST respond in French only.
+
+**what currently exists?** 
+A fully functional React Native (Expo) frontend and FastAPI/MongoDB backend for a highly secure messaging app called GhostChat. The app is cleverly disguised as a Regional Weather app (Météo Régionale) – tapping the temperature 5 times reveals the hidden chat interface. Features include E2E encryption using TweetNaCl, biometric auth, QR code contact adding, ephemeral messages, a distress PIN (which wipes data), and a long-press panic button. The codebase has been pushed to the user's personal GitHub, and an Android APK has been successfully built via Expo EAS using the user's Expo account.
+
+**Last working item**: 
+- Last item agent was working: Debugging a connection/application error reported by the user via a screenshot after downloading the latest built APK. The agent was checking the backend health endpoint just before the session ended to see if the server was down.
+- Status: IN PROGRESS
+- Agent Testing Done: Y (Checked  via curl).
+- Which testing method agent to use? manual testing by curl / screenshot tool (Ask user to describe the error on their screen since the image is removed).
+- User Testing Done: Y
+
+**All Pending/In progress Issue list**: 
+Issue 1: Production APK failing to function / connect to backend (Priority: P0)
+- Attempted fixes: The previous agent realized the built APK wasn't getting the backend URL properly. The agent hardcoded the Emergent proxy/preview URL into  () and  and asked the user to rebuild the APK.
+- Next debug checklist: 
+  -  (Lines 10-15)
+  -  (Lines 60-68)
+- Why fix this issue and what will be achieved with the fix? The user is trying to use the built APK on their phone, but the Emergent preview URLs are ephemeral and proxy-based. Hardcoding a preview URL into a distributed APK is an anti-pattern and will fail across forks/restarts. The app needs a reliable way to reach a backend, meaning the backend should likely be deployed to a permanent host (e.g., Render, Railway) for the production APK to actually work.
+- Status: IN PROGRESS
+- Is recurring issue? Y
+- Should Test frontend/backend/both after fix? Both
+- Blocked on other issue: Needs user input to clarify what error the screenshot shows, and agreement to deploy the backend permanently.
+
+**In progress Task List**: 
+None currently in progress besides the bug fix above.
+
+**Upcoming and Future Tasks**:
+- Task 1: Deploy Backend to a Permanent Host (P0) - Required so the distributed APK can communicate reliably without depending on the ephemeral Emergent workspace.
+- Task 2: Create iOS Build (P1) - User mentioned wanting an iOS version, but is waiting to purchase an Apple Developer Account.
+- Task 3: Group Chats & Voice Messages (P2) - Mentioned as future enhancements.
+
+**Completed work in this session**:
+- Implemented full frontend and backend with TweetNaCl E2E encryption (DONE)
+- Added Weather App disguise screen with 5-tap secret unlock (DONE)
+- Implemented distress PIN and long-press panic mode for data wiping (DONE)
+- Implemented QR Code generation and scanning to add contacts (DONE)
+- Generated App Logo using AI Image Generation (DONE)
+- Configured GitHub repo, Keystore, and EAS Build (DONE)
+- Successfully built Android APK via EAS (DONE)
+
+**Earlier issues found/mentioned but not fixed**:
+- Issue 1: Hardcoded Ephemeral URL in Production Build
+  - Debug checklist: Check  where  falls back to the Emergent preview URL.
+  - Why to solve this issue: The Emergent preview URL will change/die when the environment sleeps or forks. The APK installed on the user's phone will become completely useless.
+  - Should Test frontend/backend/both after fix: Frontend
+  - Is recurring issue? Y
+
+**Known issue recurrence from previous fork**:
+- Issue recurrence in previous fork: EAS Build failures (Missing plugins, non-square icons, Reanimated  requirements).
+- Recurrence count: ~5
+- Status: RESOLVED (The agent successfully fixed the Expo config and got a successful build).
+Note: Do not modify  or  arbitrarily as they are finely tuned to pass the EAS build right now.
+
+**Code Architecture**:
+
+
+**Key Technical Concepts**:
+- Frontend: Expo, React Native, Expo Router,  (for zero trace key storage),  (QR).
+- Backend: FastAPI, MongoDB, Uvicorn.
+- Architecture: E2E encrypted payloads. The backend only stores encrypted messages and deletes them upon retrieval (ephemeral).
+- Build/CI: Expo EAS CLI (used with user's Expo and GitHub accounts).
+
+**key DB schema**:
+- : {id, username, public_key, password_hash, duress_pin_hash, created_at}
+- : {id, participants (array of user_ids), last_message_at}
+- : {id, conversation_id, sender_id, encrypted_content, nonce, created_at, read}
+
+**changes in tech stack**:
+None
+
+**All files of reference**:
+- : Crucial for EAS build (contains plugins, permissions, and hardcoded  in ).
+- : Contains the authentication state, distress PIN logic, and API base URL resolution.
+- : Configured for Android  APK generation.
+
+**Areas that need refactoring**:
+- : The  resolution relies on  which currently points to the ephemeral workspace preview URL. This needs to be replaced with a permanent production backend URL once deployed.
+
+**key api endpoints**:
+- 
+- 
+- 
+- 
+- 
+
+**Critical Info for New Agent**:
+1. **Source Control & Builds**: The codebase is linked to the user's personal GitHub (). The EAS builds are linked to the user's Expo account (). The Android keystore is saved locally and committed to the repo. **Do not initialize a new git repo or EAS project.**
+2. **The Screenshot Issue**: The user uploaded a screenshot at the very end complaining that the app is broken again. Since images are removed from history, you MUST ask the user to describe what is written on the screen (e.g., Network Error, Unexpected Error, Blank screen) before guessing the fix.
+3. **URL Routing**: Do NOT hardcode the new fork's preview URL into the app and ask the user to rebuild. Explain to the user that for the APK to work permanently, the backend must be hosted on a real server (like Render, Railway, or Heroku).
+
+**documents and test reports created in this job**:
+None created.
+
+**Last 10 User Messages and any pending HUMAN messages**:
+- *User*: On a réussi déjà une fois ... pourquoi ca ne va plus mtnt?! + uploaded screenshot. (Pending: Needs to be addressed. The user is frustrated that the newly built APK is failing).
+- *User*: Ok top! Merci pour ces explications (Acknowledged agent's explanation of the tech stack).
+- *User*: Est-ce que tu peux me détailler un peu le process pour créer cette application ?... (Asked for an explanation of JSON, TS, EAS. Agent explained).
+- *User*: Peux-tu faire un checkup complet en testant tout pour éviter de refaire 5x le build? (Agent ran a full suite of bash checks to verify TS, Doctor, config, and pushed fixes).
+- *User*: uploaded screenshot (Agent deduced Unexpected error / connection error).
+- *User*: En fait je viens de retourner sur expogo est le build a démarrer quand-même
+- *User*: uploaded screenshot showing EAS build UI error.
+- *User*: Peux-tu juste me confirmer que le problème relatif a la création d un compte via une autre interface est résolu ?
+- *User*: Ghost1 (Provided username to delete).
+- *User*: Comment peut-il y avoir 6 utilisateurs alors que j ai créé qu un seul compte?
+
+**Project Health Check**:
+- Broken (The distributed Android APK cannot reliably communicate with the ephemeral backend).
+
+**3rd Party Integrations**:
+- OpenAI (Image Generation for Logo) — uses Emergent LLM Key.
+- Expo EAS Build — requires User's Expo Account (mad_deep888).
+- GitHub — requires User's Personal Access Token.
+
+**Testing status**:
+- Testing agent used after significant changes: NO (Agent used local bash curl commands and ).
+- Troubleshoot agent used after agent stuck in loop: NO.
+- Test files created: []
+- Known regressions: Production APK connectivity.
+
+**Credentials to test flow**:
+- To access the app in the web preview, you must unlock it by clicking the Temperature (18°) on the dummy weather screen 5 times.
+- Note: The agent deleted the user's  account, so new test accounts must be created.
+
+**What agent forgot to execute**:
+The agent forgot to explain to the user that building an APK pointing to an Emergent Dev URL is fundamentally flawed because the URL dies when the session ends or forks. The agent should have offered to deploy the backend to a free tier hosting provider before running the final EAS build.</analysis>

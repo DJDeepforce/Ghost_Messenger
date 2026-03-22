@@ -11,7 +11,7 @@ import random
 import string
 from datetime import datetime
 
-BASE_URL = "https://vault-talk-4.preview.emergentagent.com/api"
+BASE_URL = "https://phantom-msg-4.preview.emergentagent.com/api"
 
 def test_auth_edge_cases():
     """Test authentication edge cases"""
