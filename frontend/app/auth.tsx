@@ -1,311 +1,240 @@
 import React, { useState, useRef } from 'react';
 import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  StyleSheet,
-  KeyboardAvoidingView,
-  Platform,
-  Alert,
-  ActivityIndicator,
-  ScrollView,
-  Animated,
+  View, Text, TextInput, StyleSheet, TouchableOpacity,
+  Alert, ActivityIndicator, KeyboardAvoidingView, Platform,
+  ScrollView, Animated, Pressable,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth, useRegisterWithError } from '../src/context/AuthContext';
 
-const LONG_PRESS_DURATION = 5000; // 5 seconds for panic
+// Design tokens
+const C = {
+  bg: '#080810',
+  surface: '#0f0f1a',
+  border: '#1e1e35',
+  accent: '#7C3AED',
+  accentDim: 'rgba(124,58,237,0.15)',
+  accentGlow: 'rgba(124,58,237,0.35)',
+  text: '#E8E8F0',
+  muted: '#555570',
+  danger: '#DC2626',
+};
 
 export default function AuthScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { login, register, panic } = useAuth();
+  const { login } = useAuth();
   const registerWithError = useRegisterWithError();
-  
-  const [isLogin, setIsLogin] = useState(true);
+
+  const [mode, setMode] = useState<'login' | 'register'>('login');
   const [username, setUsername] = useState('');
   const [pin, setPin] = useState('');
-  const [confirmPin, setConfirmPin] = useState('');
   const [duressPin, setDuressPin] = useState('');
-  const [loading, setLoading] = useState(false);
   const [showPin, setShowPin] = useState(false);
-  const [showDuressField, setShowDuressField] = useState(false);
-  
-  // Long press animation
-  const pressProgress = useRef(new Animated.Value(0)).current;
-  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [isPressing, setIsPressing] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  const handleAuth = async () => {
-    if (!username.trim()) {
-      Alert.alert('Erreur', 'Entrez un nom d\'utilisateur');
-      return;
-    }
+  // Logo long press → panic
+  const panicTimer = useRef<NodeJS.Timeout | null>(null);
+  const panicAnim = useRef(new Animated.Value(1)).current;
+  const panicScale = useRef(new Animated.Value(1)).current;
+  const holdProgress = useRef(new Animated.Value(0)).current;
 
-    if (pin.length < 4) {
-      Alert.alert('Erreur', 'Le PIN doit contenir au moins 4 caractères');
-      return;
-    }
+  // Fade-in animation
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  React.useEffect(() => {
+    Animated.timing(fadeAnim, { toValue: 1, duration: 600, useNativeDriver: true }).start();
+  }, []);
 
-    if (!isLogin && pin !== confirmPin) {
-      Alert.alert('Erreur', 'Les PINs ne correspondent pas');
-      return;
-    }
+  const startPanic = () => {
+    Animated.parallel([
+      Animated.timing(panicScale, { toValue: 0.92, duration: 5000, useNativeDriver: true }),
+      Animated.timing(holdProgress, { toValue: 1, duration: 5000, useNativeDriver: false }),
+    ]).start();
+    panicTimer.current = setTimeout(() => {
+      triggerPanic();
+    }, 5000);
+  };
 
-    if (!isLogin && duressPin && duressPin === pin) {
-      Alert.alert('Erreur', 'Le PIN de détresse doit être différent du PIN principal');
-      return;
-    }
+  const cancelPanic = () => {
+    if (panicTimer.current) clearTimeout(panicTimer.current);
+    Animated.parallel([
+      Animated.spring(panicScale, { toValue: 1, useNativeDriver: true }),
+      Animated.timing(holdProgress, { toValue: 0, duration: 200, useNativeDriver: false }),
+    ]).start();
+  };
+
+  const triggerPanic = () => {
+    Alert.alert(
+      '🚨 RESET D\'URGENCE',
+      'Toutes les données seront effacées immédiatement.',
+      [
+        { text: 'Annuler', style: 'cancel', onPress: cancelPanic },
+        {
+          text: 'EFFACER TOUT', style: 'destructive',
+          onPress: async () => {
+            const { panic } = useAuth();
+            await panic();
+            router.replace('/');
+          },
+        },
+      ]
+    );
+  };
+
+  const handleSubmit = async () => {
+    if (!username.trim()) return Alert.alert('Erreur', 'Identifiant requis');
+    if (pin.length < 4) return Alert.alert('Erreur', 'PIN minimum 4 chiffres');
+    if (mode === 'register' && duressPin && duressPin === pin)
+      return Alert.alert('Erreur', 'Le PIN de détresse doit être différent du PIN principal');
 
     setLoading(true);
-    
     try {
-      let success: boolean;
-      let errorMessage: string = '';
-      
-      if (isLogin) {
-        success = await login(username.trim(), pin);
-        errorMessage = 'Identifiants incorrects';
+      if (mode === 'login') {
+        const success = await login(username.trim(), pin);
+        if (success) router.replace('/chat');
+        else Alert.alert('Erreur', 'Identifiants invalides');
       } else {
-        // Try to register
         const result = await registerWithError(username.trim(), pin, duressPin || undefined);
-        success = result.success;
-        errorMessage = result.error || 'Erreur lors de la création du compte';
+        if (result.success) router.replace('/chat');
+        else Alert.alert('Erreur', result.error || 'Erreur inconnue');
       }
-
-      if (success) {
-        router.replace('/chat');
-      } else {
-        Alert.alert('Erreur', errorMessage);
-      }
-    } catch (error: any) {
-      console.error('Auth error:', error);
-      Alert.alert(
-        'Erreur de connexion', 
-        'Impossible de contacter le serveur. Vérifiez votre connexion internet.'
-      );
     } finally {
       setLoading(false);
     }
   };
 
-  // Long press handlers for panic mode
-  const handlePressIn = () => {
-    setIsPressing(true);
-    pressProgress.setValue(0);
-    
-    Animated.timing(pressProgress, {
-      toValue: 1,
-      duration: LONG_PRESS_DURATION,
-      useNativeDriver: false,
-    }).start();
-
-    longPressTimer.current = setTimeout(async () => {
-      // Trigger panic mode
-      setIsPressing(false);
-      pressProgress.setValue(0);
-      
-      Alert.alert(
-        '🚨 RESET ACTIVÉ',
-        'Toutes les données ont été supprimées.',
-        [{ text: 'OK' }]
-      );
-      
-      await panic();
-    }, LONG_PRESS_DURATION);
-  };
-
-  const handlePressOut = () => {
-    setIsPressing(false);
-    pressProgress.setValue(0);
-    
-    if (longPressTimer.current) {
-      clearTimeout(longPressTimer.current);
-      longPressTimer.current = null;
-    }
-    
-    Animated.timing(pressProgress, {
-      toValue: 0,
-      duration: 200,
-      useNativeDriver: false,
-    }).stop();
-  };
-
-  const progressWidth = pressProgress.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['0%', '100%'],
+  const holdBorderColor = holdProgress.interpolate({
+    inputRange: [0, 0.5, 1],
+    outputRange: [C.border, C.accent, C.danger],
   });
 
   return (
-    <KeyboardAvoidingView
-      style={[styles.container, { paddingTop: insets.top }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.container, { paddingTop: insets.top + 32, paddingBottom: insets.bottom + 24 }]}
         keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
       >
-        <View style={styles.header}>
-          {/* Long press on icon for panic mode */}
-          <TouchableOpacity
-            style={styles.iconContainer}
-            onPressIn={handlePressIn}
-            onPressOut={handlePressOut}
-            activeOpacity={1}
-          >
-            <Ionicons name="shield-checkmark" size={48} color="#6366f1" />
-            {isPressing && (
-              <View style={styles.progressContainer}>
-                <Animated.View 
-                  style={[styles.progressBar, { width: progressWidth }]} 
-                />
-              </View>
-            )}
-          </TouchableOpacity>
+        <Animated.View style={{ opacity: fadeAnim, width: '100%', alignItems: 'center' }}>
+
+          {/* Logo — hold 5s for panic */}
+          <Pressable onPressIn={startPanic} onPressOut={cancelPanic}>
+            <Animated.View style={[styles.logoWrap, { transform: [{ scale: panicScale }] }]}>
+              <Animated.View style={[styles.logoBorder, { borderColor: holdBorderColor }]}>
+                <View style={styles.logoInner}>
+                  <Ionicons name="shield-checkmark" size={36} color={C.accent} />
+                </View>
+              </Animated.View>
+              {/* Glow ring */}
+              <View style={styles.logoGlow} />
+            </Animated.View>
+          </Pressable>
+
           <Text style={styles.title}>GhostChat</Text>
           <Text style={styles.subtitle}>Messagerie 100% privée</Text>
-          {isPressing && (
-            <Text style={styles.holdText}>Maintenez pour RESET...</Text>
-          )}
-        </View>
 
-        <View style={styles.form}>
-          <View style={styles.inputContainer}>
-            <Ionicons name="person-outline" size={20} color="#666" style={styles.inputIcon} />
-            <TextInput
-              style={styles.input}
-              placeholder="Nom d'utilisateur"
-              placeholderTextColor="#666"
-              value={username}
-              onChangeText={setUsername}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-          </View>
-
-          <View style={styles.inputContainer}>
-            <Ionicons name="lock-closed-outline" size={20} color="#666" style={styles.inputIcon} />
-            <TextInput
-              style={styles.input}
-              placeholder="PIN (min. 4 caractères)"
-              placeholderTextColor="#666"
-              value={pin}
-              onChangeText={setPin}
-              secureTextEntry={!showPin}
-              keyboardType="numeric"
-            />
-            <TouchableOpacity onPress={() => setShowPin(!showPin)}>
-              <Ionicons
-                name={showPin ? 'eye-off-outline' : 'eye-outline'}
-                size={20}
-                color="#666"
-              />
-            </TouchableOpacity>
-          </View>
-
-          {!isLogin && (
-            <>
-              <View style={styles.inputContainer}>
-                <Ionicons name="lock-closed-outline" size={20} color="#666" style={styles.inputIcon} />
-                <TextInput
-                  style={styles.input}
-                  placeholder="Confirmer le PIN"
-                  placeholderTextColor="#666"
-                  value={confirmPin}
-                  onChangeText={setConfirmPin}
-                  secureTextEntry={!showPin}
-                  keyboardType="numeric"
-                />
-              </View>
-
-              {/* Duress PIN Section */}
+          {/* Mode toggle */}
+          <View style={styles.toggle}>
+            {(['login', 'register'] as const).map((m) => (
               <TouchableOpacity
-                style={styles.duressToggle}
-                onPress={() => setShowDuressField(!showDuressField)}
+                key={m}
+                style={[styles.toggleBtn, mode === m && styles.toggleBtnActive]}
+                onPress={() => setMode(m)}
               >
-                <Ionicons 
-                  name={showDuressField ? "chevron-down" : "chevron-forward"} 
-                  size={18} 
-                  color="#ef4444" 
-                />
-                <Text style={styles.duressToggleText}>
-                  PIN de détresse (optionnel)
+                <Text style={[styles.toggleText, mode === m && styles.toggleTextActive]}>
+                  {m === 'login' ? 'Connexion' : 'Créer un compte'}
                 </Text>
-                <Ionicons name="warning" size={16} color="#ef4444" />
               </TouchableOpacity>
+            ))}
+          </View>
 
-              {showDuressField && (
-                <View style={styles.duressSection}>
-                  <Text style={styles.duressInfo}>
-                    Ce PIN supprimera TOUTES vos données si utilisé pour se connecter
-                  </Text>
-                  <View style={[styles.inputContainer, styles.duressInput]}>
-                    <Ionicons name="alert-circle-outline" size={20} color="#ef4444" style={styles.inputIcon} />
-                    <TextInput
-                      style={styles.input}
-                      placeholder="PIN de détresse"
-                      placeholderTextColor="#666"
-                      value={duressPin}
-                      onChangeText={setDuressPin}
-                      secureTextEntry={!showPin}
-                      keyboardType="numeric"
-                    />
-                  </View>
+          {/* Fields */}
+          <View style={styles.fields}>
+            <View style={styles.inputWrap}>
+              <Ionicons name="person-outline" size={18} color={C.muted} style={styles.inputIcon} />
+              <TextInput
+                style={styles.input}
+                value={username}
+                onChangeText={setUsername}
+                placeholder="Nom d'utilisateur"
+                placeholderTextColor={C.muted}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            </View>
+
+            <View style={styles.inputWrap}>
+              <Ionicons name="lock-closed-outline" size={18} color={C.muted} style={styles.inputIcon} />
+              <TextInput
+                style={[styles.input, { flex: 1 }]}
+                value={pin}
+                onChangeText={setPin}
+                placeholder="PIN (min. 4 caractères)"
+                placeholderTextColor={C.muted}
+                secureTextEntry={!showPin}
+                keyboardType="numeric"
+                maxLength={12}
+              />
+              <TouchableOpacity onPress={() => setShowPin(!showPin)} style={styles.eyeBtn}>
+                <Ionicons name={showPin ? 'eye-off-outline' : 'eye-outline'} size={18} color={C.muted} />
+              </TouchableOpacity>
+            </View>
+
+            {mode === 'register' && (
+              <View>
+                <View style={styles.inputWrap}>
+                  <Ionicons name="warning-outline" size={18} color={C.muted} style={styles.inputIcon} />
+                  <TextInput
+                    style={[styles.input, { flex: 1 }]}
+                    value={duressPin}
+                    onChangeText={setDuressPin}
+                    placeholder="PIN de détresse (optionnel)"
+                    placeholderTextColor={C.muted}
+                    secureTextEntry
+                    keyboardType="numeric"
+                    maxLength={12}
+                  />
                 </View>
-              )}
-            </>
-          )}
-
-          <TouchableOpacity
-            style={[styles.button, loading && styles.buttonDisabled]}
-            onPress={handleAuth}
-            disabled={loading}
-          >
-            {loading ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.buttonText}>
-                {isLogin ? 'Se connecter' : 'Créer un compte'}
-              </Text>
+                <Text style={styles.hint}>
+                  ⚠️ Ce PIN efface silencieusement toutes vos données
+                </Text>
+              </View>
             )}
-          </TouchableOpacity>
+          </View>
 
+          {/* Submit */}
           <TouchableOpacity
-            style={styles.switchButton}
-            onPress={() => {
-              setIsLogin(!isLogin);
-              setConfirmPin('');
-              setDuressPin('');
-              setShowDuressField(false);
-            }}
+            style={[styles.submitBtn, loading && { opacity: 0.6 }]}
+            onPress={handleSubmit}
+            disabled={loading}
+            activeOpacity={0.85}
           >
-            <Text style={styles.switchText}>
-              {isLogin ? 'Pas de compte ? Créer un compte' : 'Déjà un compte ? Se connecter'}
-            </Text>
+            {loading
+              ? <ActivityIndicator color="#fff" />
+              : <Text style={styles.submitText}>
+                  {mode === 'login' ? 'Se connecter' : 'Créer le compte'}
+                </Text>
+            }
           </TouchableOpacity>
-        </View>
 
-        <View style={styles.features}>
-          <View style={styles.featureItem}>
-            <Ionicons name="eye-off" size={16} color="#6366f1" />
-            <Text style={styles.featureText}>Anonymat total</Text>
+          {/* Features strip */}
+          <View style={styles.features}>
+            {[
+              { icon: 'eye-off-outline', label: 'Anonymat total' },
+              { icon: 'lock-closed-outline', label: 'Chiffrement E2E' },
+              { icon: 'timer-outline', label: 'Messages éphémères' },
+            ].map((f) => (
+              <View key={f.label} style={styles.featureItem}>
+                <Ionicons name={f.icon as any} size={14} color={C.accent} />
+                <Text style={styles.featureText}>{f.label}</Text>
+              </View>
+            ))}
           </View>
-          <View style={styles.featureItem}>
-            <Ionicons name="lock-closed" size={16} color="#6366f1" />
-            <Text style={styles.featureText}>Chiffrement E2E</Text>
-          </View>
-          <View style={styles.featureItem}>
-            <Ionicons name="timer" size={16} color="#6366f1" />
-            <Text style={styles.featureText}>Messages éphémères</Text>
-          </View>
-        </View>
 
-        <Text style={styles.longPressHint}>
-          Maintenez le logo 5 sec pour RESET d'urgence
-        </Text>
+          <Text style={styles.panicHint}>Maintenez le logo 5 sec pour RESET d'urgence</Text>
+        </Animated.View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -313,149 +242,67 @@ export default function AuthScreen() {
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
-    backgroundColor: '#0a0a0a',
+    flexGrow: 1, backgroundColor: C.bg,
+    alignItems: 'center', paddingHorizontal: 24,
   },
-  scrollContent: {
-    flexGrow: 1,
-    padding: 24,
-    justifyContent: 'center',
+  logoWrap: { marginBottom: 24, alignItems: 'center', justifyContent: 'center' },
+  logoBorder: {
+    width: 88, height: 88, borderRadius: 44,
+    borderWidth: 2, alignItems: 'center', justifyContent: 'center',
   },
-  header: {
-    alignItems: 'center',
-    marginBottom: 40,
+  logoInner: {
+    width: 76, height: 76, borderRadius: 38,
+    backgroundColor: C.accentDim,
+    alignItems: 'center', justifyContent: 'center',
   },
-  iconContainer: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: 'rgba(99, 102, 241, 0.1)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 16,
-    overflow: 'hidden',
-  },
-  progressContainer: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: 4,
-    backgroundColor: 'rgba(239, 68, 68, 0.3)',
-  },
-  progressBar: {
-    height: '100%',
-    backgroundColor: '#ef4444',
-  },
-  holdText: {
-    color: '#ef4444',
-    fontSize: 12,
-    marginTop: 8,
+  logoGlow: {
+    position: 'absolute', width: 100, height: 100, borderRadius: 50,
+    backgroundColor: C.accentGlow, opacity: 0.25,
   },
   title: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 8,
+    fontSize: 34, fontWeight: '800', color: C.text,
+    letterSpacing: -1, marginBottom: 6,
   },
-  subtitle: {
-    fontSize: 16,
-    color: '#666',
+  subtitle: { fontSize: 15, color: C.muted, marginBottom: 36 },
+  toggle: {
+    flexDirection: 'row', backgroundColor: C.surface,
+    borderRadius: 14, padding: 4, width: '100%',
+    marginBottom: 28, borderWidth: 1, borderColor: C.border,
   },
-  form: {
-    marginBottom: 32,
+  toggleBtn: { flex: 1, paddingVertical: 11, borderRadius: 11, alignItems: 'center' },
+  toggleBtnActive: { backgroundColor: C.accent },
+  toggleText: { color: C.muted, fontWeight: '600', fontSize: 14 },
+  toggleTextActive: { color: '#fff' },
+  fields: { width: '100%', gap: 12, marginBottom: 24 },
+  inputWrap: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: C.surface, borderRadius: 14,
+    borderWidth: 1, borderColor: C.border,
+    paddingHorizontal: 14,
   },
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#1a1a1a',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#333',
-  },
-  inputIcon: {
-    marginRight: 12,
-  },
+  inputIcon: { marginRight: 10 },
   input: {
-    flex: 1,
-    height: 52,
-    color: '#fff',
-    fontSize: 16,
+    flex: 1, color: C.text, fontSize: 15,
+    paddingVertical: 16,
   },
-  duressToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 8,
-    marginBottom: 8,
+  eyeBtn: { padding: 6 },
+  hint: {
+    fontSize: 12, color: '#F59E0B', marginTop: 8,
+    paddingHorizontal: 4, lineHeight: 17,
   },
-  duressToggleText: {
-    color: '#ef4444',
-    fontSize: 14,
-    marginHorizontal: 8,
+  submitBtn: {
+    width: '100%', backgroundColor: C.accent,
+    borderRadius: 14, paddingVertical: 17,
+    alignItems: 'center', marginBottom: 32,
+    shadowColor: C.accent, shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.4, shadowRadius: 16, elevation: 8,
   },
-  duressSection: {
-    backgroundColor: 'rgba(239, 68, 68, 0.1)',
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.3)',
-  },
-  duressInfo: {
-    color: '#ef4444',
-    fontSize: 12,
-    marginBottom: 12,
-    textAlign: 'center',
-  },
-  duressInput: {
-    marginBottom: 0,
-    borderColor: 'rgba(239, 68, 68, 0.5)',
-  },
-  button: {
-    backgroundColor: '#6366f1',
-    borderRadius: 12,
-    height: 52,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 8,
-  },
-  buttonDisabled: {
-    opacity: 0.7,
-  },
-  buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  switchButton: {
-    alignItems: 'center',
-    marginTop: 20,
-  },
-  switchText: {
-    color: '#6366f1',
-    fontSize: 14,
-  },
+  submitText: { color: '#fff', fontSize: 17, fontWeight: '700', letterSpacing: 0.3 },
   features: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    flexWrap: 'wrap',
+    flexDirection: 'row', gap: 16, marginBottom: 24,
+    flexWrap: 'wrap', justifyContent: 'center',
   },
-  featureItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginVertical: 4,
-  },
-  featureText: {
-    color: '#888',
-    fontSize: 12,
-    marginLeft: 6,
-  },
-  longPressHint: {
-    textAlign: 'center',
-    color: '#444',
-    fontSize: 11,
-    marginTop: 20,
-  },
+  featureItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  featureText: { color: C.muted, fontSize: 12 },
+  panicHint: { fontSize: 11, color: '#2a2a3a', textAlign: 'center' },
 });
