@@ -1,69 +1,131 @@
 import React, { useState } from 'react';
 import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  Switch,
-  Alert,
-  ScrollView,
+  View, Text, StyleSheet, TouchableOpacity, ScrollView,
+  TextInput, Alert, ActivityIndicator, Switch,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../src/context/AuthContext';
+import * as SecureStore from 'expo-secure-store';
+
+const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'https://ghost-messenger.onrender.com';
+
+const C = {
+  bg: '#080810',
+  surface: '#0f0f1a',
+  border: '#1e1e35',
+  accent: '#7C3AED',
+  accentDim: 'rgba(124,58,237,0.12)',
+  text: '#E8E8F0',
+  muted: '#555570',
+  danger: '#DC2626',
+  dangerDim: 'rgba(220,38,38,0.1)',
+  success: '#10B981',
+};
 
 export default function SettingsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { user, biometricsEnabled, enableBiometrics, panic, logout } = useAuth();
-  
-  const [biometrics, setBiometrics] = useState(biometricsEnabled);
+  const { user, token, logout, panic, hashPin, enableBiometrics, biometricsEnabled } = useAuth();
 
-  const handleBiometricsToggle = async () => {
-    if (!biometrics) {
-      const success = await enableBiometrics();
-      if (success) {
-        setBiometrics(true);
-        Alert.alert('Succès', 'Biométrie activée');
-      } else {
-        Alert.alert('Erreur', 'Impossible d\'activer la biométrie');
-      }
-    } else {
-      setBiometrics(false);
+  // Change PIN state
+  const [showChangePIN, setShowChangePIN] = useState(false);
+  const [currentPin, setCurrentPin] = useState('');
+  const [newPin, setNewPin] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
+  const [changingPIN, setChangingPIN] = useState(false);
+
+  // Change Duress PIN state
+  const [showChangeDuress, setShowChangeDuress] = useState(false);
+  const [currentPinForDuress, setCurrentPinForDuress] = useState('');
+  const [newDuressPin, setNewDuressPin] = useState('');
+  const [changingDuress, setChangingDuress] = useState(false);
+
+  const handleChangePIN = async () => {
+    if (!currentPin || newPin.length < 4) {
+      return Alert.alert('Erreur', 'PIN actuel requis et nouveau PIN minimum 4 chiffres');
     }
+    if (newPin !== confirmPin) {
+      return Alert.alert('Erreur', 'Les nouveaux PINs ne correspondent pas');
+    }
+    if (newPin === currentPin) {
+      return Alert.alert('Erreur', 'Le nouveau PIN doit être différent');
+    }
+
+    setChangingPIN(true);
+    try {
+      const currentHash = hashPin(currentPin);
+      const newHash = hashPin(newPin);
+
+      // Verify current PIN by attempting login logic
+      const res = await fetch(`${API_URL}/api/auth/change-pin`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ current_pin_hash: currentHash, new_pin_hash: newHash }),
+      });
+
+      if (res.ok) {
+        Alert.alert('✅ Succès', 'PIN modifié avec succès');
+        setCurrentPin(''); setNewPin(''); setConfirmPin('');
+        setShowChangePIN(false);
+      } else {
+        const err = await res.json();
+        Alert.alert('Erreur', err.detail || 'PIN actuel incorrect');
+      }
+    } catch {
+      Alert.alert('Erreur', 'Impossible de contacter le serveur');
+    } finally {
+      setChangingPIN(false);
+    }
+  };
+
+  const handleChangeDuressPin = async () => {
+    if (!currentPinForDuress || newDuressPin.length < 4) {
+      return Alert.alert('Erreur', 'PIN principal requis et PIN de détresse minimum 4 chiffres');
+    }
+
+    setChangingDuress(true);
+    try {
+      const currentHash = hashPin(currentPinForDuress);
+      const duressHash = hashPin(newDuressPin);
+
+      const res = await fetch(`${API_URL}/api/auth/change-duress-pin`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ current_pin_hash: currentHash, duress_pin_hash: duressHash }),
+      });
+
+      if (res.ok) {
+        Alert.alert('✅ Succès', 'PIN de détresse modifié');
+        setCurrentPinForDuress(''); setNewDuressPin('');
+        setShowChangeDuress(false);
+      } else {
+        const err = await res.json();
+        Alert.alert('Erreur', err.detail || 'PIN incorrect');
+      }
+    } catch {
+      Alert.alert('Erreur', 'Impossible de contacter le serveur');
+    } finally {
+      setChangingDuress(false);
+    }
+  };
+
+  const handleEnableBiometrics = async () => {
+    const success = await enableBiometrics();
+    if (success) Alert.alert('✅ Activé', 'Biométrie activée');
+    else Alert.alert('Erreur', 'Biométrie non disponible ou annulée');
   };
 
   const handlePanic = () => {
     Alert.alert(
-      'MODE PANIQUE',
-      'ATTENTION: Cette action va SUPPRIMER définitivement:\n\n• Tous vos messages\n• Toutes vos conversations\n• Votre compte\n• Toutes les données locales\n\nCette action est IRRÉVERSIBLE.',
+      '🚨 Mode Panique',
+      'Efface TOUTES les données : compte, messages, clés. Cette action est IRRÉVERSIBLE.',
       [
         { text: 'Annuler', style: 'cancel' },
         {
-          text: 'TOUT SUPPRIMER',
-          style: 'destructive',
-          onPress: async () => {
-            await panic();
-            router.replace('/auth');
-          },
-        },
-      ]
-    );
-  };
-
-  const handleLogout = () => {
-    Alert.alert(
-      'Déconnexion',
-      'Voulez-vous vous déconnecter ?',
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Déconnexion',
-          onPress: async () => {
-            await logout();
-            router.replace('/auth');
-          },
+          text: 'EFFACER TOUT', style: 'destructive',
+          onPress: async () => { await panic(); router.replace('/'); },
         },
       ]
     );
@@ -73,255 +135,219 @@ export default function SettingsScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => router.back()}
-        >
-          <Ionicons name="arrow-back" size={24} color="#fff" />
+        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+          <Ionicons name="chevron-back" size={24} color={C.text} />
         </TouchableOpacity>
         <Text style={styles.title}>Paramètres</Text>
-        <View style={styles.placeholder} />
+        <View style={{ width: 36 }} />
       </View>
 
-      <ScrollView style={styles.content}>
-        {/* Profile Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Profil</Text>
-          <View style={styles.profileCard}>
-            <View style={styles.avatar}>
-              <Ionicons name="person" size={32} color="#6366f1" />
-            </View>
-            <View style={styles.profileInfo}>
-              <Text style={styles.username}>@{user?.username}</Text>
-              <Text style={styles.userId}>ID: {user?.id?.slice(0, 8)}...</Text>
-            </View>
-          </View>
-        </View>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
 
-        {/* Security Section */}
+        {/* Account info */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Sécurité</Text>
-          
-          <View style={styles.settingItem}>
-            <View style={styles.settingInfo}>
-              <Ionicons name="finger-print" size={22} color="#6366f1" />
-              <View style={styles.settingText}>
-                <Text style={styles.settingLabel}>Biométrie</Text>
-                <Text style={styles.settingDescription}>
-                  Utiliser Face ID / Touch ID
-                </Text>
+          <Text style={styles.sectionTitle}>COMPTE</Text>
+          <View style={styles.card}>
+            <View style={styles.profileRow}>
+              <View style={styles.avatar}>
+                <Text style={styles.avatarText}>{(user?.username || '?')[0].toUpperCase()}</Text>
+              </View>
+              <View>
+                <Text style={styles.profileName}>@{user?.username}</Text>
+                <Text style={styles.profileSub}>Identifiant anonyme</Text>
               </View>
             </View>
-            <Switch
-              value={biometrics}
-              onValueChange={handleBiometricsToggle}
-              trackColor={{ false: '#333', true: '#6366f1' }}
-              thumbColor="#fff"
-            />
-          </View>
-
-          <View style={styles.settingItem}>
-            <View style={styles.settingInfo}>
-              <Ionicons name="lock-closed" size={22} color="#22c55e" />
-              <View style={styles.settingText}>
-                <Text style={styles.settingLabel}>Chiffrement E2E</Text>
-                <Text style={styles.settingDescription}>
-                  Activé par défaut
-                </Text>
-              </View>
-            </View>
-            <Ionicons name="checkmark-circle" size={24} color="#22c55e" />
-          </View>
-
-          <View style={styles.settingItem}>
-            <View style={styles.settingInfo}>
-              <Ionicons name="timer" size={22} color="#f59e0b" />
-              <View style={styles.settingText}>
-                <Text style={styles.settingLabel}>Messages éphémères</Text>
-                <Text style={styles.settingDescription}>
-                  Suppression immédiate après lecture
-                </Text>
-              </View>
-            </View>
-            <Ionicons name="checkmark-circle" size={24} color="#22c55e" />
           </View>
         </View>
 
-        {/* Privacy Info */}
+        {/* Security */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Confidentialité</Text>
-          <View style={styles.infoCard}>
-            <Ionicons name="shield-checkmark" size={24} color="#6366f1" />
-            <Text style={styles.infoText}>
-              Vos messages sont chiffrés de bout en bout avec le protocole NaCl. 
-              Aucune donnée n'est stockée sur nos serveurs après lecture. 
-              Aucun email ou numéro de téléphone n'est requis.
-            </Text>
+          <Text style={styles.sectionTitle}>SÉCURITÉ</Text>
+          <View style={styles.card}>
+
+            {/* Change PIN */}
+            <TouchableOpacity
+              style={styles.row}
+              onPress={() => setShowChangePIN(!showChangePIN)}
+            >
+              <View style={styles.rowLeft}>
+                <View style={[styles.rowIcon, { backgroundColor: C.accentDim }]}>
+                  <Ionicons name="key-outline" size={18} color={C.accent} />
+                </View>
+                <Text style={styles.rowLabel}>Modifier le PIN</Text>
+              </View>
+              <Ionicons name={showChangePIN ? 'chevron-up' : 'chevron-down'} size={16} color={C.muted} />
+            </TouchableOpacity>
+
+            {showChangePIN && (
+              <View style={styles.subForm}>
+                <TextInput style={styles.subInput} value={currentPin} onChangeText={setCurrentPin}
+                  placeholder="PIN actuel" placeholderTextColor={C.muted}
+                  secureTextEntry keyboardType="numeric" maxLength={12} />
+                <TextInput style={styles.subInput} value={newPin} onChangeText={setNewPin}
+                  placeholder="Nouveau PIN (min. 4 chiffres)" placeholderTextColor={C.muted}
+                  secureTextEntry keyboardType="numeric" maxLength={12} />
+                <TextInput style={styles.subInput} value={confirmPin} onChangeText={setConfirmPin}
+                  placeholder="Confirmer le nouveau PIN" placeholderTextColor={C.muted}
+                  secureTextEntry keyboardType="numeric" maxLength={12} />
+                <TouchableOpacity
+                  style={[styles.subBtn, changingPIN && { opacity: 0.6 }]}
+                  onPress={handleChangePIN} disabled={changingPIN}
+                >
+                  {changingPIN ? <ActivityIndicator size="small" color="#fff" /> :
+                    <Text style={styles.subBtnText}>Confirmer le changement</Text>}
+                </TouchableOpacity>
+              </View>
+            )}
+
+            <View style={styles.rowDivider} />
+
+            {/* Change Duress PIN */}
+            <TouchableOpacity
+              style={styles.row}
+              onPress={() => setShowChangeDuress(!showChangeDuress)}
+            >
+              <View style={styles.rowLeft}>
+                <View style={[styles.rowIcon, { backgroundColor: 'rgba(245,158,11,0.1)' }]}>
+                  <Ionicons name="warning-outline" size={18} color="#F59E0B" />
+                </View>
+                <View>
+                  <Text style={styles.rowLabel}>PIN de détresse</Text>
+                  <Text style={styles.rowSub}>Efface tout silencieusement</Text>
+                </View>
+              </View>
+              <Ionicons name={showChangeDuress ? 'chevron-up' : 'chevron-down'} size={16} color={C.muted} />
+            </TouchableOpacity>
+
+            {showChangeDuress && (
+              <View style={styles.subForm}>
+                <Text style={styles.subHint}>
+                  ⚠️ Entrer ce PIN lors du login effacera silencieusement toutes vos données
+                </Text>
+                <TextInput style={styles.subInput} value={currentPinForDuress} onChangeText={setCurrentPinForDuress}
+                  placeholder="Votre PIN principal" placeholderTextColor={C.muted}
+                  secureTextEntry keyboardType="numeric" maxLength={12} />
+                <TextInput style={styles.subInput} value={newDuressPin} onChangeText={setNewDuressPin}
+                  placeholder="Nouveau PIN de détresse" placeholderTextColor={C.muted}
+                  secureTextEntry keyboardType="numeric" maxLength={12} />
+                <TouchableOpacity
+                  style={[styles.subBtn, { backgroundColor: '#D97706' }, changingDuress && { opacity: 0.6 }]}
+                  onPress={handleChangeDuressPin} disabled={changingDuress}
+                >
+                  {changingDuress ? <ActivityIndicator size="small" color="#fff" /> :
+                    <Text style={styles.subBtnText}>Définir le PIN de détresse</Text>}
+                </TouchableOpacity>
+              </View>
+            )}
+
+            <View style={styles.rowDivider} />
+
+            {/* Biometrics */}
+            <View style={styles.row}>
+              <View style={styles.rowLeft}>
+                <View style={[styles.rowIcon, { backgroundColor: 'rgba(16,185,129,0.1)' }]}>
+                  <Ionicons name="finger-print-outline" size={18} color={C.success} />
+                </View>
+                <View>
+                  <Text style={styles.rowLabel}>Biométrie</Text>
+                  <Text style={styles.rowSub}>Face ID / Empreinte</Text>
+                </View>
+              </View>
+              <Switch
+                value={biometricsEnabled}
+                onValueChange={handleEnableBiometrics}
+                trackColor={{ false: C.border, true: C.accent }}
+                thumbColor="#fff"
+              />
+            </View>
           </View>
         </View>
 
-        {/* Actions */}
+        {/* Danger zone */}
         <View style={styles.section}>
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={handleLogout}
-          >
-            <Ionicons name="log-out-outline" size={22} color="#fff" />
-            <Text style={styles.actionButtonText}>Déconnexion</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.actionButton, styles.panicButton]}
-            onPress={handlePanic}
-          >
-            <Ionicons name="warning" size={22} color="#fff" />
-            <Text style={styles.actionButtonText}>MODE PANIQUE</Text>
-          </TouchableOpacity>
-          <Text style={styles.panicWarning}>
-            Supprime définitivement toutes vos données
-          </Text>
+          <Text style={styles.sectionTitle}>ZONE DE DANGER</Text>
+          <View style={[styles.card, { borderColor: C.danger + '40' }]}>
+            <TouchableOpacity style={styles.row} onPress={handlePanic}>
+              <View style={styles.rowLeft}>
+                <View style={[styles.rowIcon, { backgroundColor: C.dangerDim }]}>
+                  <Ionicons name="nuclear-outline" size={18} color={C.danger} />
+                </View>
+                <View>
+                  <Text style={[styles.rowLabel, { color: C.danger }]}>Mode Panique</Text>
+                  <Text style={styles.rowSub}>Efface tout immédiatement</Text>
+                </View>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={C.danger} />
+            </TouchableOpacity>
+          </View>
         </View>
 
-        <View style={{ height: insets.bottom + 20 }} />
+        {/* Logout */}
+        <TouchableOpacity
+          style={styles.logoutBtn}
+          onPress={() => Alert.alert('Se déconnecter ?', undefined, [
+            { text: 'Annuler', style: 'cancel' },
+            { text: 'Déconnecter', onPress: async () => { await logout(); router.replace('/'); } },
+          ])}
+        >
+          <Ionicons name="log-out-outline" size={18} color={C.muted} />
+          <Text style={styles.logoutText}>Se déconnecter</Text>
+        </TouchableOpacity>
+
+        <Text style={styles.version}>GhostChat · E2E · Éphémère · Privé</Text>
       </ScrollView>
     </View>
   );
 }
 
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0a0a0a',
-  },
+  container: { flex: 1, backgroundColor: C.bg },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#1a1a1a',
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingVertical: 14,
   },
-  backButton: {
-    width: 44,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
+  backBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  title: { fontSize: 18, fontWeight: '700', color: C.text },
+  scroll: { paddingHorizontal: 20, paddingBottom: 40 },
+  section: { marginBottom: 24 },
+  sectionTitle: { fontSize: 11, fontWeight: '700', color: C.muted, letterSpacing: 1.5, marginBottom: 10 },
+  card: {
+    backgroundColor: C.surface, borderRadius: 16,
+    borderWidth: 1, borderColor: C.border, overflow: 'hidden',
   },
-  title: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#fff',
-  },
-  placeholder: {
-    width: 44,
-  },
-  content: {
-    flex: 1,
-  },
-  section: {
-    paddingHorizontal: 20,
-    paddingTop: 24,
-  },
-  sectionTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#666',
-    textTransform: 'uppercase',
-    marginBottom: 12,
-  },
-  profileCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#1a1a1a',
-    borderRadius: 16,
-    padding: 16,
-  },
+  profileRow: { flexDirection: 'row', alignItems: 'center', padding: 16, gap: 14 },
   avatar: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: 'rgba(99, 102, 241, 0.1)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 16,
+    width: 50, height: 50, borderRadius: 25,
+    backgroundColor: C.accentDim, alignItems: 'center', justifyContent: 'center',
   },
-  profileInfo: {
-    flex: 1,
-  },
-  username: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#fff',
-  },
-  userId: {
-    fontSize: 12,
-    color: '#666',
-    marginTop: 4,
-  },
-  settingItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#1a1a1a',
-    borderRadius: 12,
+  avatarText: { fontSize: 22, fontWeight: '800', color: C.accent },
+  profileName: { fontSize: 17, fontWeight: '700', color: C.text },
+  profileSub: { fontSize: 12, color: C.muted, marginTop: 2 },
+  row: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     padding: 16,
-    marginBottom: 8,
   },
-  settingInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
+  rowLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
+  rowIcon: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  rowLabel: { fontSize: 15, fontWeight: '600', color: C.text },
+  rowSub: { fontSize: 12, color: C.muted, marginTop: 1 },
+  rowDivider: { height: 1, backgroundColor: C.border, marginHorizontal: 16 },
+  subForm: { paddingHorizontal: 16, paddingBottom: 16, gap: 10 },
+  subInput: {
+    backgroundColor: C.bg, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12,
+    color: C.text, fontSize: 14, borderWidth: 1, borderColor: C.border,
   },
-  settingText: {
-    marginLeft: 12,
-    flex: 1,
+  subHint: { fontSize: 12, color: '#F59E0B', lineHeight: 18 },
+  subBtn: {
+    backgroundColor: C.accent, borderRadius: 10,
+    paddingVertical: 12, alignItems: 'center',
   },
-  settingLabel: {
-    fontSize: 16,
-    color: '#fff',
+  subBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  logoutBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 8, paddingVertical: 16, marginBottom: 16,
   },
-  settingDescription: {
-    fontSize: 12,
-    color: '#666',
-    marginTop: 2,
-  },
-  infoCard: {
-    flexDirection: 'row',
-    backgroundColor: 'rgba(99, 102, 241, 0.1)',
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(99, 102, 241, 0.2)',
-  },
-  infoText: {
-    flex: 1,
-    fontSize: 13,
-    color: '#888',
-    lineHeight: 20,
-    marginLeft: 12,
-  },
-  actionButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#1a1a1a',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-  },
-  actionButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#fff',
-    marginLeft: 8,
-  },
-  panicButton: {
-    backgroundColor: '#ef4444',
-  },
-  panicWarning: {
-    textAlign: 'center',
-    fontSize: 12,
-    color: '#666',
-  },
+  logoutText: { color: C.muted, fontSize: 15, fontWeight: '600' },
+  version: { textAlign: 'center', fontSize: 11, color: '#1e1e35' },
 });
