@@ -175,79 +175,53 @@ async def register_user(user: UserCreate):
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @api_router.post("/auth/login")
-async def login_user(credentials: UserLogin):
-    """Login with username and PIN hash - checks for duress PIN"""
-    # First check if this is a duress PIN
-    user_with_duress = await db.users.find_one({
-        "username": credentials.username,
-        "duress_pin_hash": hash_data(credentials.pin_hash),
-        "is_active": True
-    })
-    
-    if user_with_duress:
-        # DURESS PIN DETECTED - Wipe all data silently
-        user_id = user_with_duress["id"]
-        
-        # Delete all user data
-        await db.messages.delete_many({
-            "$or": [{"sender_id": user_id}, {"recipient_id": user_id}]
-        })
-        await db.conversations.delete_many({"participants": user_id})
-        await db.sessions.delete_many({"user_id": user_id})
-        await db.invites.delete_many({"created_by": user_id})
-        await db.users.delete_one({"id": user_id})
-        
-        # Return fake "invalid credentials" to not reveal duress activation
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    
-    # Normal login
-    user = await db.users.find_one({
-        "username": credentials.username,
-        "pin_hash": hash_data(credentials.pin_hash),
-        "is_active": True
-    })
-    
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    
-    # Create session token
-    token = generate_session_token()
-    session = {
-        "token": token,
-        "user_id": user["id"],
-        "created_at": datetime.utcnow(),
-        "expires_at": datetime.utcnow() + timedelta(hours=24)
-    }
-    
-    await db.sessions.insert_one(session)
-    
-    return {
-        "token": token,
-        "user_id": user["id"],
-        "username": user["username"],
-        "public_key": user["public_key"],
-        "expires_at": session["expires_at"]
-    }
+# ==================== ROUTES À AJOUTER DANS server.py ====================
+# Coller ces routes dans server.py après la route /auth/logout
 
-@api_router.post("/auth/logout")
-async def logout_user(user_id: str = Depends(verify_session)):
-    """Logout and invalidate session"""
-    await db.sessions.delete_many({"user_id": user_id})
-    return {"message": "Logged out successfully"}
+class ChangePinRequest(BaseModel):
+    current_pin_hash: str
+    new_pin_hash: str
 
-@api_router.get("/auth/me", response_model=UserResponse)
-async def get_current_user(user_id: str = Depends(verify_session)):
-    """Get current user info"""
+class ChangeDuressPinRequest(BaseModel):
+    current_pin_hash: str
+    duress_pin_hash: str
+
+@api_router.post("/auth/change-pin")
+async def change_pin(request: ChangePinRequest, user_id: str = Depends(verify_session)):
+    """Change user PIN"""
     user = await db.users.find_one({"id": user_id})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    return UserResponse(
-        id=user["id"],
-        username=user["username"],
-        public_key=user["public_key"],
-        created_at=user["created_at"]
+    # Verify current PIN
+    if user["pin_hash"] != hash_data(request.current_pin_hash):
+        raise HTTPException(status_code=401, detail="PIN actuel incorrect")
+    
+    # Update PIN
+    await db.users.update_one(
+        {"id": user_id},
+        {"$set": {"pin_hash": hash_data(request.new_pin_hash)}}
     )
+    return {"message": "PIN modifié avec succès"}
+
+@api_router.post("/auth/change-duress-pin")
+async def change_duress_pin(request: ChangeDuressPinRequest, user_id: str = Depends(verify_session)):
+    """Change or set duress PIN"""
+    user = await db.users.find_one({"id": user_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Verify current PIN
+    if user["pin_hash"] != hash_data(request.current_pin_hash):
+        raise HTTPException(status_code=401, detail="PIN principal incorrect")
+    
+    # Update duress PIN
+    await db.users.update_one(
+        {"id": user_id},
+        {"$set": {"duress_pin_hash": hash_data(request.duress_pin_hash)}}
+    )
+    return {"message": "PIN de détresse modifié"}
+
 
 # ==================== INVITE CODES ====================
 
