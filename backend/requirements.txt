@@ -1,9 +1,9 @@
 fastapi
 uvicorn
-motor
-pymongo[srv]
-dnspython
 python-dotenv
+pymongo[srv]
 pydantic
-PyNaCl
+motor
+python-multipart
+websockets
 certifi

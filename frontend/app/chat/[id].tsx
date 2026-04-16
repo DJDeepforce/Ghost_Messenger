@@ -1,3 +1,15 @@
+/**
+ * ChatScreen — real-time ephemeral encrypted messaging.
+ *
+ * Architecture:
+ *  - WebSocket at /ws/{conversationId}?token=... for real-time delivery.
+ *  - E2E encryption via TweetNaCl box (src/utils/encryption.ts).
+ *    Plaintext never leaves the device; the server relays the encrypted
+ *    blob exactly as received.
+ *  - Messages are stored in component state only. Navigating away
+ *    (closing the WebSocket) destroys the local message list — no history.
+ */
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
@@ -9,35 +21,61 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
-  Image,
   ActivityIndicator,
-  Modal,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '../../src/context/AuthContext';
 import { encryptMessage, decryptMessage, EncryptedMessage } from '../../src/utils/encryption';
 
-const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
+// ── Design tokens (matching existing app theme) ──────────────────────────────
+const C = {
+  bg: '#080810',
+  surface: '#0f0f1a',
+  border: '#1e1e35',
+  accent: '#7C3AED',
+  accentDim: 'rgba(124,58,237,0.12)',
+  text: '#E8E8F0',
+  muted: '#555570',
+  own: '#7C3AED',
+  other: '#151525',
+  green: '#22c55e',
+};
 
-interface Message {
-  id: string;
-  conversation_id: string;
-  sender_id: string;
-  encrypted_content: string;
-  content_type: string;
-  timestamp: string;
-  is_read: boolean;
-  decrypted?: string;
-}
+const BACKEND_URL =
+  process.env.EXPO_PUBLIC_BACKEND_URL || 'https://ghost-messenger.onrender.com';
+const API_URL = BACKEND_URL;
+// Derive WebSocket URL from HTTP URL
+const WS_BASE = BACKEND_URL.replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://');
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 interface Participant {
   id: string;
   username: string;
   public_key: string;
 }
+
+interface ChatMessage {
+  id: string;
+  sender_id: string;
+  plaintext: string;
+  timestamp: string;
+  isOwn: boolean;
+}
+
+// ── Wire-format sent over WebSocket ──────────────────────────────────────────
+interface WireMessage {
+  id: string;
+  sender_id?: string;          // server stamps this from the verified session
+  sender_public_key: string;   // needed by recipient for NaCl box.open()
+  encrypted: EncryptedMessage; // { nonce, ciphertext } — server never opens this
+  timestamp?: string;
+  server_ts?: string;
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
 
 export default function ChatScreen() {
   const { id: conversationId } = useLocalSearchParams<{ id: string }>();
@@ -46,75 +84,134 @@ export default function ChatScreen() {
   const { user, token, getKeyPair } = useAuth();
   const flatListRef = useRef<FlatList>(null);
 
-  const [messages, setMessages] = useState<Message[]>([]);
+  // WebSocket ref — kept outside state so closure captures are stable
+  const wsRef = useRef<WebSocket | null>(null);
+  // Keep a ref to participant so the WS onmessage handler always has latest value
+  const participantRef = useRef<Participant | null>(null);
+
   const [participant, setParticipant] = useState<Participant | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
-  const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [viewingImage, setViewingImage] = useState<string | null>(null);
+  const [connected, setConnected] = useState(false);
+  const [sending, setSending] = useState(false);
+
+  // ── Lifecycle ──────────────────────────────────────────────────────────────
 
   useEffect(() => {
-    loadParticipant();
-    loadMessages();
-    
-    // Poll for new messages every 3 seconds
-    const interval = setInterval(loadMessages, 3000);
-    return () => clearInterval(interval);
+    let cancelled = false;
+
+    (async () => {
+      const p = await loadParticipant();
+      if (cancelled || !p) return;
+      setLoading(false);
+      openWebSocket(p);
+    })();
+
+    return () => {
+      cancelled = true;
+      // Close the WebSocket — this destroys the session and wipes the room
+      // on the server when the last client leaves.
+      wsRef.current?.close(1000, 'navigate-away');
+      wsRef.current = null;
+      // Wipe local message history — ephemeral by design
+      setMessages([]);
+    };
   }, [conversationId]);
 
-  const loadParticipant = async () => {
-    try {
-      const response = await fetch(
-        `${API_URL}/api/conversations/${conversationId}/participant`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+  // ── Participant ────────────────────────────────────────────────────────────
 
-      if (response.ok) {
-        const data = await response.json();
-        setParticipant(data);
-      }
-    } catch (error) {
-      console.error('Error loading participant:', error);
+  const loadParticipant = async (): Promise<Participant | null> => {
+    try {
+      const res = await fetch(`${API_URL}/api/conversations/${conversationId}/participant`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return null;
+      const data: Participant = await res.json();
+      setParticipant(data);
+      participantRef.current = data;
+      return data;
+    } catch (e) {
+      console.error('loadParticipant:', e);
+      return null;
     }
   };
 
-  const loadMessages = async () => {
-    try {
-      const response = await fetch(
-        `${API_URL}/api/messages/${conversationId}`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+  // ── WebSocket ──────────────────────────────────────────────────────────────
 
-      if (response.ok) {
-        const data = await response.json();
-        
-        // Decrypt messages
-        const keyPair = getKeyPair();
-        if (keyPair && participant) {
-          const decryptedMessages = data.map((msg: Message) => {
-            try {
-              const encrypted: EncryptedMessage = JSON.parse(msg.encrypted_content);
-              const senderKey = msg.sender_id === user?.id ? keyPair.publicKey : participant.public_key;
-              const decrypted = decryptMessage(encrypted, senderKey, keyPair.secretKey);
-              return { ...msg, decrypted: decrypted || '[Message illisible]' };
-            } catch (e) {
-              return { ...msg, decrypted: '[Message illisible]' };
-            }
-          });
-          setMessages(decryptedMessages);
-        } else {
-          setMessages(data);
+  const openWebSocket = useCallback(
+    (p: Participant) => {
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+
+      const url = `${WS_BASE}/ws/${conversationId}?token=${encodeURIComponent(token ?? '')}`;
+      const ws = new WebSocket(url);
+
+      ws.onopen = () => setConnected(true);
+
+      ws.onmessage = (event: WebSocketMessageEvent) => {
+        try {
+          const wire: WireMessage = JSON.parse(event.data);
+          const keyPair = getKeyPair();
+          const currentParticipant = participantRef.current;
+
+          if (!keyPair || !currentParticipant) return;
+
+          // ── PHASE 3: decrypt with NaCl box ──────────────────────────────
+          // The sender encrypted with: recipientPublicKey = my public key
+          //                            senderSecretKey   = their secret key
+          // We decrypt with:           senderPublicKey   = their public key
+          //                            recipientSecretKey = my secret key
+          const senderPublicKey =
+            wire.sender_public_key || currentParticipant.public_key;
+
+          const plaintext = decryptMessage(
+            wire.encrypted,
+            senderPublicKey,
+            keyPair.secretKey,
+          );
+
+          if (!plaintext) return; // wrong key or tampered — discard silently
+
+          const msg: ChatMessage = {
+            id: wire.id,
+            sender_id: wire.sender_id ?? '',
+            plaintext,
+            timestamp: wire.server_ts ?? wire.timestamp ?? new Date().toISOString(),
+            isOwn: wire.sender_id === user?.id,
+          };
+
+          setMessages((prev) => [...prev, msg]);
+          setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 80);
+        } catch (err) {
+          console.error('ws.onmessage:', err);
         }
-      }
-    } catch (error) {
-      console.error('Error loading messages:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+      };
 
-  const sendMessage = async (content: string, type: string = 'text') => {
-    if (!content.trim() || !participant) return;
+      ws.onclose = () => setConnected(false);
+
+      ws.onerror = (e) => {
+        console.error('WebSocket error:', e);
+        setConnected(false);
+      };
+
+      wsRef.current = ws;
+    },
+    [conversationId, token, user?.id, getKeyPair],
+  );
+
+  // ── Send ───────────────────────────────────────────────────────────────────
+
+  const sendMessage = useCallback(async () => {
+    const content = inputText.trim();
+    if (!content || !participant || sending) return;
+
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      Alert.alert('Déconnecté', 'La connexion est perdue. Revenez et réessayez.');
+      return;
+    }
 
     setSending(true);
     try {
@@ -124,451 +221,268 @@ export default function ChatScreen() {
         return;
       }
 
-      // Encrypt the message
+      // ── PHASE 3: encrypt before sending ──────────────────────────────────
+      // Encrypt with: recipientPublicKey = participant's public key
+      //               senderSecretKey   = my secret key
+      // Server receives only the ciphertext — plaintext stays on device.
       const encrypted = encryptMessage(content, participant.public_key, keyPair.secretKey);
 
-      const response = await fetch(`${API_URL}/api/messages`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          conversation_id: conversationId,
-          encrypted_content: JSON.stringify(encrypted),
-          content_type: type,
-          recipient_id: participant.id,
-        }),
-      });
+      const msgId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const wire: WireMessage = {
+        id: msgId,
+        sender_public_key: keyPair.publicKey,
+        encrypted,
+        timestamp: new Date().toISOString(),
+      };
 
-      if (response.ok) {
-        setInputText('');
-        await loadMessages();
-        flatListRef.current?.scrollToEnd();
-      } else {
-        Alert.alert('Erreur', 'Impossible d\'envoyer le message');
-      }
-    } catch (error) {
-      console.error('Send error:', error);
-      Alert.alert('Erreur', 'Impossible d\'envoyer le message');
+      ws.send(JSON.stringify(wire));
+
+      // Add own message to local state immediately — server does NOT echo back
+      const ownMsg: ChatMessage = {
+        id: msgId,
+        sender_id: user?.id ?? '',
+        plaintext: content,
+        timestamp: wire.timestamp!,
+        isOwn: true,
+      };
+      setMessages((prev) => [...prev, ownMsg]);
+      setInputText('');
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 80);
+    } catch (err) {
+      Alert.alert('Erreur', "Impossible d'envoyer le message");
     } finally {
       setSending(false);
     }
+  }, [inputText, participant, sending, getKeyPair, user?.id]);
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+
+  const formatTime = (ts: string) => {
+    const d = new Date(ts);
+    return d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
   };
 
-  const pickImage = async () => {
-    try {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission refusée', 'Accès à la galerie requis');
-        return;
-      }
+  // ── Render ─────────────────────────────────────────────────────────────────
 
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        base64: true,
-        quality: 0.5,
-      });
+  const renderMessage = ({ item }: { item: ChatMessage }) => (
+    <View style={[styles.msgRow, item.isOwn && styles.msgRowOwn]}>
+      <View style={[styles.bubble, item.isOwn ? styles.bubbleOwn : styles.bubbleOther]}>
+        <Text style={styles.msgText}>{item.plaintext}</Text>
+        <Text style={[styles.msgTime, item.isOwn && styles.msgTimeOwn]}>
+          {formatTime(item.timestamp)}
+        </Text>
+      </View>
+    </View>
+  );
 
-      if (!result.canceled && result.assets[0].base64) {
-        const base64Image = `data:image/jpeg;base64,${result.assets[0].base64}`;
-        await sendMessage(base64Image, 'image');
-      }
-    } catch (error) {
-      console.error('Image pick error:', error);
-      Alert.alert('Erreur', 'Impossible de sélectionner l\'image');
-    }
-  };
-
-  const markAsRead = async (messageId: string) => {
-    try {
-      await fetch(`${API_URL}/api/messages/${messageId}/read`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      // Message will be deleted on server after reading
-      await loadMessages();
-    } catch (error) {
-      console.error('Mark read error:', error);
-    }
-  };
-
-  const formatTime = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-  };
-
-  const renderMessage = ({ item }: { item: Message }) => {
-    const isOwn = item.sender_id === user?.id;
-    const isImage = item.content_type === 'image';
-
+  if (loading) {
     return (
-      <TouchableOpacity
-        style={[styles.messageContainer, isOwn && styles.messageContainerOwn]}
-        onLongPress={() => {
-          if (!isOwn && !item.is_read) {
-            Alert.alert(
-              'Message éphémère',
-              'Ce message sera supprimé après lecture.',
-              [
-                { text: 'Annuler', style: 'cancel' },
-                { text: 'Marquer comme lu', onPress: () => markAsRead(item.id) },
-              ]
-            );
-          }
-        }}
-        activeOpacity={0.8}
-      >
-        <View style={[styles.messageBubble, isOwn ? styles.bubbleOwn : styles.bubbleOther]}>
-          {isImage ? (
-            <TouchableOpacity onPress={() => setViewingImage(item.decrypted || null)}>
-              <Image
-                source={{ uri: item.decrypted }}
-                style={styles.messageImage}
-                resizeMode="cover"
-              />
-              <View style={styles.imageOverlay}>
-                <Ionicons name="eye" size={16} color="#fff" />
-                <Text style={styles.imageOverlayText}>Appuyer pour voir</Text>
-              </View>
-            </TouchableOpacity>
-          ) : (
-            <Text style={[styles.messageText, isOwn && styles.messageTextOwn]}>
-              {item.decrypted || '[Chiffré]'}
-            </Text>
-          )}
-          <View style={styles.messageFooter}>
-            <Text style={[styles.messageTime, isOwn && styles.messageTimeOwn]}>
-              {formatTime(item.timestamp)}
-            </Text>
-            {isOwn && (
-              <Ionicons
-                name={item.is_read ? 'checkmark-done' : 'checkmark'}
-                size={14}
-                color={item.is_read ? '#6366f1' : '#666'}
-                style={styles.readIcon}
-              />
-            )}
-          </View>
-        </View>
-        {!isOwn && !item.is_read && (
-          <View style={styles.ephemeralBadge}>
-            <Ionicons name="timer" size={10} color="#f59e0b" />
-          </View>
-        )}
-      </TouchableOpacity>
+      <View style={[styles.container, styles.center]}>
+        <ActivityIndicator color={C.accent} size="large" />
+      </View>
     );
-  };
+  }
 
   return (
     <KeyboardAvoidingView
       style={[styles.container, { paddingTop: insets.top }]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
     >
-      {/* Header */}
+      {/* ── Header ── */}
       <View style={styles.header}>
         <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => router.back()}
+          style={styles.backBtn}
+          onPress={() => {
+            wsRef.current?.close(1000, 'navigate-away');
+            router.back();
+          }}
         >
-          <Ionicons name="arrow-back" size={24} color="#fff" />
+          <Ionicons name="arrow-back" size={24} color={C.text} />
         </TouchableOpacity>
+
         <View style={styles.headerInfo}>
-          <View style={styles.headerAvatar}>
-            <Ionicons name="person" size={20} color="#6366f1" />
+          <View style={styles.avatar}>
+            <Text style={styles.avatarText}>
+              {(participant?.username?.[0] ?? '?').toUpperCase()}
+            </Text>
           </View>
           <View>
-            <Text style={styles.headerName}>
-              @{participant?.username || 'Chargement...'}
-            </Text>
-            <View style={styles.secureIndicator}>
-              <Ionicons name="lock-closed" size={10} color="#22c55e" />
-              <Text style={styles.secureText}>Chiffré E2E</Text>
+            <Text style={styles.headerName}>@{participant?.username ?? '…'}</Text>
+            <View style={styles.statusRow}>
+              <View style={[styles.statusDot, { backgroundColor: connected ? C.green : C.muted }]} />
+              <Ionicons name="lock-closed" size={10} color={C.green} style={{ marginLeft: 6 }} />
+              <Text style={styles.statusText}>
+                {connected ? ' Chiffré E2E · En ligne' : ' Reconnexion…'}
+              </Text>
             </View>
           </View>
         </View>
       </View>
 
-      {/* Messages */}
-      {loading ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#6366f1" />
-        </View>
-      ) : (
-        <FlatList
-          ref={flatListRef}
-          data={messages}
-          keyExtractor={(item) => item.id}
-          renderItem={renderMessage}
-          contentContainerStyle={styles.messagesList}
-          onContentSizeChange={() => flatListRef.current?.scrollToEnd()}
-          ListEmptyComponent={
-            <View style={styles.emptyMessages}>
-              <Ionicons name="chatbubble-outline" size={48} color="#333" />
-              <Text style={styles.emptyText}>Aucun message</Text>
-              <Text style={styles.emptySubtext}>Les messages sont chiffrés de bout en bout</Text>
+      {/* ── Messages ── */}
+      <FlatList
+        ref={flatListRef}
+        data={messages}
+        keyExtractor={(item) => item.id}
+        renderItem={renderMessage}
+        contentContainerStyle={styles.msgList}
+        ListEmptyComponent={
+          <View style={styles.emptyWrap}>
+            <View style={styles.emptyIconWrap}>
+              <Ionicons name="lock-closed-outline" size={32} color={C.muted} />
             </View>
-          }
-        />
-      )}
+            <Text style={styles.emptyTitle}>Chiffré de bout en bout</Text>
+            <Text style={styles.emptyBody}>
+              Les messages ne sont pas sauvegardés.{'\n'}Ils disparaissent dès que vous partez.
+            </Text>
+          </View>
+        }
+      />
 
-      {/* Input */}
-      <View style={[styles.inputContainer, { paddingBottom: insets.bottom + 8 }]}>
-        <TouchableOpacity style={styles.attachButton} onPress={pickImage}>
-          <Ionicons name="image" size={24} color="#6366f1" />
-        </TouchableOpacity>
-        <View style={styles.inputWrapper}>
+      {/* ── Input ── */}
+      <View style={[styles.inputRow, { paddingBottom: insets.bottom + 8 }]}>
+        <View style={styles.inputWrap}>
           <TextInput
             style={styles.input}
-            placeholder="Message..."
-            placeholderTextColor="#666"
+            placeholder="Message…"
+            placeholderTextColor={C.muted}
             value={inputText}
             onChangeText={setInputText}
+            onSubmitEditing={sendMessage}
             multiline
             maxLength={5000}
+            returnKeyType="send"
           />
         </View>
         <TouchableOpacity
-          style={[styles.sendButton, (!inputText.trim() || sending) && styles.sendButtonDisabled]}
-          onPress={() => sendMessage(inputText)}
-          disabled={!inputText.trim() || sending}
+          style={[
+            styles.sendBtn,
+            (!inputText.trim() || sending || !connected) && styles.sendBtnDisabled,
+          ]}
+          onPress={sendMessage}
+          disabled={!inputText.trim() || sending || !connected}
+          activeOpacity={0.7}
         >
           {sending ? (
             <ActivityIndicator size="small" color="#fff" />
           ) : (
-            <Ionicons name="send" size={20} color="#fff" />
+            <Ionicons name="send" size={18} color="#fff" />
           )}
         </TouchableOpacity>
       </View>
-
-      {/* Image Viewer Modal */}
-      <Modal visible={!!viewingImage} animationType="fade" transparent>
-        <View style={styles.imageViewerOverlay}>
-          <TouchableOpacity
-            style={styles.closeImageButton}
-            onPress={() => setViewingImage(null)}
-          >
-            <Ionicons name="close" size={32} color="#fff" />
-          </TouchableOpacity>
-          {viewingImage && (
-            <Image
-              source={{ uri: viewingImage }}
-              style={styles.fullImage}
-              resizeMode="contain"
-            />
-          )}
-          <Text style={styles.imageWarning}>
-            Cette image sera supprimée après fermeture
-          </Text>
-        </View>
-      </Modal>
     </KeyboardAvoidingView>
   );
 }
 
+// ── Styles ────────────────────────────────────────────────────────────────────
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0a0a0a',
-  },
+  container: { flex: 1, backgroundColor: C.bg },
+  center: { alignItems: 'center', justifyContent: 'center' },
+
+  // Header
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 12,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#1a1a1a',
+    borderBottomColor: C.border,
+    backgroundColor: C.surface,
   },
-  backButton: {
-    width: 44,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
+  backBtn: {
+    width: 44, height: 44,
+    alignItems: 'center', justifyContent: 'center',
   },
-  headerInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  headerAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(99, 102, 241, 0.1)',
-    alignItems: 'center',
-    justifyContent: 'center',
+  headerInfo: { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  avatar: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: C.accentDim,
+    borderWidth: 1, borderColor: C.accent + '50',
+    alignItems: 'center', justifyContent: 'center',
     marginRight: 12,
   },
-  headerName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#fff',
-  },
-  secureIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 2,
-  },
-  secureText: {
-    fontSize: 11,
-    color: '#22c55e',
-    marginLeft: 4,
-  },
-  loadingContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  messagesList: {
-    padding: 16,
-    flexGrow: 1,
-  },
-  messageContainer: {
+  avatarText: { color: C.accent, fontSize: 16, fontWeight: '700' },
+  headerName: { fontSize: 15, fontWeight: '600', color: C.text },
+  statusRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
+  statusDot: { width: 7, height: 7, borderRadius: 4 },
+  statusText: { fontSize: 11, color: C.green, marginLeft: 2 },
+
+  // Messages
+  msgList: { padding: 16, flexGrow: 1 },
+  msgRow: {
     marginBottom: 8,
     flexDirection: 'row',
     alignItems: 'flex-end',
   },
-  messageContainerOwn: {
-    justifyContent: 'flex-end',
-  },
-  messageBubble: {
-    maxWidth: '75%',
-    borderRadius: 16,
-    padding: 12,
+  msgRowOwn: { justifyContent: 'flex-end' },
+  bubble: {
+    maxWidth: '78%',
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
   },
   bubbleOwn: {
-    backgroundColor: '#6366f1',
+    backgroundColor: C.own,
     borderBottomRightRadius: 4,
   },
   bubbleOther: {
-    backgroundColor: '#1a1a1a',
+    backgroundColor: C.other,
+    borderWidth: 1,
+    borderColor: C.border,
     borderBottomLeftRadius: 4,
   },
-  messageText: {
-    fontSize: 15,
-    color: '#fff',
-    lineHeight: 20,
+  msgText: { fontSize: 15, color: C.text, lineHeight: 21 },
+  msgTime: { fontSize: 11, color: 'rgba(255,255,255,0.5)', marginTop: 4, textAlign: 'right' },
+  msgTimeOwn: { color: 'rgba(255,255,255,0.6)' },
+
+  // Empty state
+  emptyWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 80 },
+  emptyIconWrap: {
+    width: 72, height: 72, borderRadius: 36,
+    backgroundColor: C.surface,
+    borderWidth: 1, borderColor: C.border,
+    alignItems: 'center', justifyContent: 'center',
+    marginBottom: 16,
   },
-  messageTextOwn: {
-    color: '#fff',
-  },
-  messageImage: {
-    width: 200,
-    height: 200,
-    borderRadius: 12,
-  },
-  imageOverlay: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 8,
-    borderBottomLeftRadius: 12,
-    borderBottomRightRadius: 12,
-  },
-  imageOverlayText: {
-    color: '#fff',
-    fontSize: 12,
-    marginLeft: 4,
-  },
-  messageFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 4,
-  },
-  messageTime: {
-    fontSize: 11,
-    color: '#888',
-  },
-  messageTimeOwn: {
-    color: 'rgba(255,255,255,0.7)',
-  },
-  readIcon: {
-    marginLeft: 4,
-  },
-  ephemeralBadge: {
-    marginLeft: 4,
-    marginBottom: 4,
-  },
-  emptyMessages: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingTop: 100,
-  },
-  emptyText: {
-    fontSize: 16,
-    color: '#666',
-    marginTop: 12,
-  },
-  emptySubtext: {
-    fontSize: 12,
-    color: '#444',
-    marginTop: 4,
-  },
-  inputContainer: {
+  emptyTitle: { fontSize: 16, fontWeight: '600', color: C.text, marginBottom: 8 },
+  emptyBody: { fontSize: 13, color: C.muted, textAlign: 'center', lineHeight: 20 },
+
+  // Input
+  inputRow: {
     flexDirection: 'row',
     alignItems: 'flex-end',
     paddingHorizontal: 12,
-    paddingTop: 12,
+    paddingTop: 10,
     borderTopWidth: 1,
-    borderTopColor: '#1a1a1a',
+    borderTopColor: C.border,
+    backgroundColor: C.surface,
   },
-  attachButton: {
-    width: 44,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  inputWrapper: {
+  inputWrap: {
     flex: 1,
-    backgroundColor: '#1a1a1a',
-    borderRadius: 20,
+    backgroundColor: C.bg,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: C.border,
     paddingHorizontal: 16,
-    marginHorizontal: 8,
+    marginRight: 8,
     maxHeight: 120,
   },
   input: {
-    color: '#fff',
-    fontSize: 16,
+    color: C.text,
+    fontSize: 15,
     paddingVertical: 10,
     maxHeight: 100,
   },
-  sendButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#6366f1',
-    alignItems: 'center',
-    justifyContent: 'center',
+  sendBtn: {
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: C.accent,
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: C.accent,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.5,
+    shadowRadius: 6,
+    elevation: 4,
   },
-  sendButtonDisabled: {
-    opacity: 0.5,
-  },
-  imageViewerOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.95)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  closeImageButton: {
-    position: 'absolute',
-    top: 60,
-    right: 20,
-    zIndex: 10,
-  },
-  fullImage: {
-    width: '90%',
-    height: '70%',
-  },
-  imageWarning: {
-    color: '#f59e0b',
-    fontSize: 12,
-    marginTop: 20,
-  },
+  sendBtnDisabled: { opacity: 0.35 },
 });
